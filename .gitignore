@@ -1,0 +1,56 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*~
+
+# Configuration files with sensitive data (if needed)
+# configVideoConversion.json
+
+# Build artifacts
+bin/
+dist/
+
+# Downloaded executables and tools
+HandBrakeCLI*/
+MediaInfo*/
+ffmpeg*/
+
+# Database/cache files
+converted_files.json
+*_converted_files.json
+
+# Test output
+coverage.out
+coverage.html

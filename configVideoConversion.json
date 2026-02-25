@@ -1,0 +1,30 @@
+{
+  "server_url": "http://localhost:5341/",
+  "api_key": "",
+  "use_partial_hash": true,
+  "max_queue_size": 3,
+  "mediainfo_path": "MediaInfo_CLI_24.04_Windows_x64\\MediaInfo.exe",
+  "ffmpeg_path": "ffmpeg\\bin\\ffmpeg.exe",
+  "ffprobe_path": "",
+  "temp_directory": "",
+  "video_encoder": "hevc_nvenc",
+  "quality_preset": "balanced",
+  "custom_quality_sd": 0,
+  "custom_quality_720p": 0,
+  "custom_quality_1080p": 0,
+  "custom_quality_4k": 0,
+  "file_extensions": [
+    ".MOV",
+    ".AVI",
+    ".MKV",
+    ".MP4",
+    ".WMV",
+    ".M4V",
+    ".FLV",
+    ".MPG",
+    ".ASF",
+    ".TS",
+    ".M2TS"
+  ],
+  "log_level": "INFO"
+}
