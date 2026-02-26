@@ -2,14 +2,10 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"context"
 	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,154 +14,24 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/zeebo/blake3"
+
+	cfgpkg "video-converter/internal/config"
+	"video-converter/internal/database"
+	"video-converter/internal/ffmpeg"
+	"video-converter/internal/logging"
+	"video-converter/internal/types"
 )
 
 var log = logrus.New()
 
-// SimpleFormatter outputs only the log message without level or other metadata
-type SimpleFormatter struct{}
-
-func (f *SimpleFormatter) Format(entry *logrus.Entry) ([]byte, error) {
-	return []byte(entry.Message + "\n"), nil
-}
-
-// SeqHook sends logs to Seq
-type SeqHook struct {
-	serverURL string
-	apiKey    string
-	client    *http.Client
-}
-
-// NewSeqHook creates a new Seq hook
-func NewSeqHook(serverURL, apiKey string) *SeqHook {
-	return &SeqHook{
-		serverURL: strings.TrimSuffix(serverURL, "/"),
-		apiKey:    apiKey,
-		client:    &http.Client{Timeout: 5 * time.Second},
-	}
-}
-
-// Levels returns the log levels this hook should fire on
-func (hook *SeqHook) Levels() []logrus.Level {
-	return logrus.AllLevels
-}
-
-// Fire sends the log entry to Seq
-func (hook *SeqHook) Fire(entry *logrus.Entry) error {
-	// Build Seq event
-	event := map[string]interface{}{
-		"@t":  entry.Time.Format(time.RFC3339Nano),
-		"@mt": entry.Message,
-		"@l":  entry.Level.String(),
-	}
-
-	// Add fields
-	for k, v := range entry.Data {
-		event[k] = v
-	}
-
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-
-	// Send to Seq
-	req, err := http.NewRequest("POST", hook.serverURL+"/api/events/raw", bytes.NewBuffer(data))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if hook.apiKey != "" {
-		req.Header.Set("X-Seq-ApiKey", hook.apiKey)
-	}
-
-	resp, err := hook.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return nil
-}
-
-// Config holds application configuration
-type Config struct {
-	ServerURL          string   `json:"server_url"`
-	APIKey             string   `json:"api_key"`
-	UsePartialHash     bool     `json:"use_partial_hash"`
-	MaxQueueSize       int      `json:"max_queue_size"`
-	MediaInfoPath      string   `json:"mediainfo_path"`
-	FFmpegPath         string   `json:"ffmpeg_path"`
-	FFprobePath        string   `json:"ffprobe_path"`
-	TempDirectory      string   `json:"temp_directory"`
-	VideoEncoder       string   `json:"video_encoder"`
-	QualityPreset      string   `json:"quality_preset"`
-	CustomQualitySD    int      `json:"custom_quality_sd,omitempty"`
-	CustomQuality720p  int      `json:"custom_quality_720p,omitempty"`
-	CustomQuality1080p int      `json:"custom_quality_1080p,omitempty"`
-	CustomQuality4K    int      `json:"custom_quality_4k,omitempty"`
-	FileExtensions     []string `json:"file_extensions"`
-	LogLevel           string   `json:"log_level"`
-}
-
-// Record represents a cache entry
-type Record struct {
-	OriginalSize  int64  `json:"original_size"`
-	ConvertedSize int64  `json:"converted_size,omitempty"`
-	Output        string `json:"output,omitempty"`
-	Note          string `json:"note,omitempty"`
-	Error         string `json:"error,omitempty"`
-}
-
-// DatabaseManager manages per-drive cache files
-type DatabaseManager struct {
-	mu    sync.RWMutex
-	dbs   map[string]map[string]Record // drive -> hash -> record
-	dirty map[string]bool
-}
-
-// Job represents a conversion job
-type Job struct {
-	FilePath        string
-	BaseDir         string // User-provided input directory (dropped folder)
-	DriveRoot       string
-	FileHash        string
-	OriginalSize    int64
-	Width           int
-	Height          int
-	Format          string
-	CodecID         string
-	DurationSeconds float64
-	FileNumber      int // Current file number
-	TotalFiles      int // Total files to process
-	FolderNumber    int // Current folder number
-	TotalFolders    int // Total folders
-}
-
-// Stats tracks conversion statistics
-type Stats struct {
-	mu             sync.Mutex
-	FilesAnalyzed  int
-	FilesProcessed int
-	FilesImproved  int
-	FilesDiscarded int
-	FilesSkipped   int
-	FilesErrored   int
-	OriginalBytes  int64
-	FinalBytes     int64
-	TouchedDrives  map[string]bool
-}
-
 var (
-	config              Config
-	dbManager           *DatabaseManager
-	stats               Stats
+	config              types.Config
+	dbManager           *database.DatabaseManager
+	stats               types.Stats
 	execDir             string
 	outputDriveOverride string // If set, use this drive instead of source drive
 )
@@ -196,13 +62,17 @@ func main() {
 	if !filepath.IsAbs(configPath) {
 		configPath = filepath.Join(execDir, configPath)
 	}
-	if err := loadConfig(configPath); err != nil {
+	cfg, err := cfgpkg.LoadConfig(configPath)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+	config = cfg
 
 	// Setup logging
-	setupLogging()
+	var logCleanup func()
+	log, logCleanup = logging.SetupLogging(config.ServerURL, config.APIKey, config.LogLevel, execDir)
+	defer logCleanup()
 
 	// Override encoder if specified
 	if *encoderFlag != "" {
@@ -225,11 +95,7 @@ func main() {
 		log.Fatal("No input paths specified")
 	}
 
-	// Initialize database manager
-	dbManager = &DatabaseManager{
-		dbs:   make(map[string]map[string]Record),
-		dirty: make(map[string]bool),
-	}
+	dbManager = database.NewDatabaseManager(log)
 
 	// Initialize stats
 	stats.TouchedDrives = make(map[string]bool)
@@ -244,7 +110,7 @@ func main() {
 	log.Infof("Found %d files to process", len(files))
 
 	// Setup pipeline
-	jobQueue := make(chan Job, config.MaxQueueSize)
+	jobQueue := make(chan types.Job, config.MaxQueueSize)
 	var wg sync.WaitGroup
 
 	// Start consumer
@@ -261,7 +127,7 @@ func main() {
 	wg.Wait()
 
 	// Save all databases
-	dbManager.saveAll()
+	dbManager.SaveAll()
 
 	// Print stats
 	printStats()
@@ -273,81 +139,6 @@ func main() {
 	log.Info("")
 	log.Info("Press Enter to exit...")
 	bufio.NewReader(os.Stdin).ReadBytes('\n')
-}
-
-func loadConfig(path string) error {
-	// Check if config exists
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Create default config
-		defaultConfig := Config{
-			ServerURL:          "http://localhost:5341/",
-			APIKey:             "",
-			UsePartialHash:     true,
-			MaxQueueSize:       3,
-			MediaInfoPath:      "MediaInfo_CLI_24.04_Windows_x64\\MediaInfo.exe",
-			FFmpegPath:         "ffmpeg\\bin\\ffmpeg.exe",
-			FFprobePath:        "",
-			TempDirectory:      "",
-			VideoEncoder:       "hevc_nvenc",
-			QualityPreset:      "balanced",
-			CustomQualitySD:    0,
-			CustomQuality720p:  0,
-			CustomQuality1080p: 0,
-			CustomQuality4K:    0,
-			FileExtensions:     []string{".MOV", ".AVI", ".MKV", ".MP4", ".WMV", ".M4V", ".FLV", ".MPG", ".ASF", ".TS", ".M2TS"},
-			LogLevel:           "INFO",
-		}
-		data, err := json.MarshalIndent(defaultConfig, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, data, 0644); err != nil {
-			return err
-		}
-		config = defaultConfig
-		return nil
-	}
-
-	// Load existing config
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, &config)
-}
-
-func setupLogging() {
-	// Create log file with timestamp
-	logFileName := fmt.Sprintf("video-converter_%s.log", time.Now().Format("2006-01-02_15-04-05"))
-	logFilePath := filepath.Join(execDir, logFileName)
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
-	} else {
-		// Write to both console and file
-		// Console: simple format without timestamps
-		// File: full format with timestamps and levels
-		mw := io.MultiWriter(os.Stdout, logFile)
-		log.SetOutput(mw)
-		fmt.Printf("Logging to: %s\n", logFilePath)
-	}
-
-	// Custom formatter that only outputs the message (for console)
-	log.SetFormatter(&SimpleFormatter{})
-
-	// Set log level
-	level, err := logrus.ParseLevel(config.LogLevel)
-	if err != nil {
-		level = logrus.InfoLevel
-	}
-	log.SetLevel(level)
-
-	// Add Seq hook if configured (Seq will get full timestamps and levels)
-	if config.ServerURL != "" {
-		hook := NewSeqHook(config.ServerURL, config.APIKey)
-		log.AddHook(hook)
-		log.Debug("Seq logging hook enabled")
-	}
 }
 
 func askYesNo(prompt string) bool {
@@ -490,7 +281,19 @@ func discoverFiles(paths []string) ([]string, map[string]string) {
 	return files, fileToBaseDir
 }
 
-func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- Job, bypass, forceHevc bool) {
+func resolveFFprobeExe() string {
+	ffprobeExe := cfgpkg.ResolveExecutable(config.FFprobePath, "ffprobe.exe", execDir)
+	if ffprobeExe == "" {
+		ffmpegExe := cfgpkg.ResolveExecutable(config.FFmpegPath, "ffmpeg.exe", execDir)
+		ffprobeExe = filepath.Join(filepath.Dir(ffmpegExe), "ffprobe.exe")
+		if _, err := os.Stat(ffprobeExe); err != nil {
+			ffprobeExe, _ = exec.LookPath("ffprobe.exe")
+		}
+	}
+	return ffprobeExe
+}
+
+func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- types.Job, bypass, forceHevc bool) {
 	defer close(jobQueue)
 
 	// Disable progress bar to avoid conflicts with log output
@@ -525,84 +328,86 @@ func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- J
 			globalFileNumber++
 			log.Debugf("[%d/%d] Analyzing: %s", globalFileNumber, totalFiles, filepath.Base(filePath))
 
-			stats.mu.Lock()
+			stats.Mu.Lock()
 			stats.FilesAnalyzed++
-			stats.mu.Unlock()
+			stats.Mu.Unlock()
 
 			// Get file info
 			info, err := os.Stat(filePath)
 			if err != nil {
 				log.Warnf("Failed to stat %s: %v", filePath, err)
-				stats.mu.Lock()
+				stats.Mu.Lock()
 				stats.FilesErrored++
-				stats.mu.Unlock()
+				stats.Mu.Unlock()
 				continue
 			}
 
 			// Get drive root
 			driveRoot := getDriveRoot(filePath)
-			stats.mu.Lock()
+			stats.Mu.Lock()
 			stats.TouchedDrives[driveRoot] = true
-			stats.mu.Unlock()
+			stats.Mu.Unlock()
 
 			// Compute hash
 			fileHash, _ := getFileHash(filePath, config.UsePartialHash)
 			if fileHash == "error_hash" {
 				log.Warnf("Failed to hash %s", filePath)
-				stats.mu.Lock()
+				stats.Mu.Lock()
 				stats.FilesErrored++
-				stats.mu.Unlock()
+				stats.Mu.Unlock()
 				continue
 			}
 
 			// Check cache
 			if !bypass {
-				rec := dbManager.getRecord(driveRoot, fileHash)
+				rec := dbManager.GetRecord(driveRoot, fileHash)
 				if rec != nil && (rec.Output != "" || rec.Note == "not_beneficial" || rec.Note == "already_hevc") {
 					log.Debugf("Skipping %s (already processed)", filePath)
-					stats.mu.Lock()
+					stats.Mu.Lock()
 					stats.FilesSkipped++
-					stats.mu.Unlock()
+					stats.Mu.Unlock()
 					continue
 				}
 			}
 
 			// Get MediaInfo
-			videoInfo, err := getMediaInfo(filePath)
+			mediaInfoExe := cfgpkg.ResolveExecutable(config.MediaInfoPath, "MediaInfo.exe", execDir)
+			videoInfo, err := ffmpeg.GetMediaInfo(filePath, mediaInfoExe)
 			if err != nil {
 				log.Warnf("Failed to get MediaInfo for %s: %v", filePath, err)
-				stats.mu.Lock()
+				stats.Mu.Lock()
 				stats.FilesErrored++
-				stats.mu.Unlock()
+				stats.Mu.Unlock()
 				continue
 			}
 			if videoInfo == nil {
 				log.Warnf("No video track found in %s", filePath)
-				stats.mu.Lock()
+				stats.Mu.Lock()
 				stats.FilesErrored++
-				stats.mu.Unlock()
+				stats.Mu.Unlock()
 				continue
 			}
 
 			// Check if already HEVC
-			if isHEVC(videoInfo.Format, videoInfo.CodecID) && !forceHevc {
+			if ffmpeg.IsHEVC(videoInfo.Format, videoInfo.CodecID) && !forceHevc {
 				log.Infof("Skipping %s (already HEVC)", filePath)
-				dbManager.updateRecord(driveRoot, fileHash, Record{
+				dbManager.UpdateRecord(driveRoot, fileHash, types.Record{
 					OriginalSize:  info.Size(),
 					ConvertedSize: info.Size(),
 					Note:          "already_hevc",
 				})
-				stats.mu.Lock()
+				stats.Mu.Lock()
 				stats.FilesSkipped++
-				stats.mu.Unlock()
+				stats.Mu.Unlock()
 				continue
 			}
 
 			// Get duration via FFprobe
-			duration := getDuration(filePath)
+			ffprobeExe := resolveFFprobeExe()
+			duration := ffmpeg.GetDuration(filePath, ffprobeExe, log)
 
 			// Enqueue job
-			job := Job{
+			job := types.Job{
 				FilePath:        filePath,
 				BaseDir:         fileToBaseDir[filePath],
 				DriveRoot:       driveRoot,
@@ -623,14 +428,14 @@ func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- J
 	}
 }
 
-func consumer(jobQueue <-chan Job, dryRun bool) {
+func consumer(jobQueue <-chan types.Job, dryRun bool) {
 	for job := range jobQueue {
 		processConversion(job, dryRun)
-		dbManager.saveAll()
+		dbManager.SaveAll()
 	}
 }
 
-func processConversion(job Job, dryRun bool) {
+func processConversion(job types.Job, dryRun bool) {
 	fileName := filepath.Base(job.FilePath)
 
 	log.Info("")
@@ -704,23 +509,26 @@ func processConversion(job Job, dryRun bool) {
 	tempPath := filepath.Join(tempDir, fmt.Sprintf("__tmp__%s%s", hash8, outputExt))
 
 	// Build FFmpeg command
-	quality := determineQuality(job.Width)
-	args := buildFFmpegArgs(job.FilePath, tempPath, quality, outputExt)
+	quality := cfgpkg.DetermineQuality(job.Width, config)
+	args := ffmpeg.BuildArgs(job.FilePath, tempPath, quality, outputExt, config.VideoEncoder)
 
 	// Run FFmpeg
-	ffmpegExe := resolveExecutable(config.FFmpegPath, "ffmpeg.exe")
-	rc := runFFmpeg(ffmpegExe, args, job.FilePath, job.DurationSeconds)
+	ffmpegExe := cfgpkg.ResolveExecutable(config.FFmpegPath, "ffmpeg.exe", execDir)
+	rc, stderrOut := ffmpeg.Run(ffmpegExe, args, job.FilePath, job.DurationSeconds, log)
 
 	if rc != 0 {
 		log.Errorf("FFmpeg failed with exit code %d for %s", rc, job.FilePath)
-		dbManager.updateRecord(job.DriveRoot, job.FileHash, Record{
+		if stderrOut != "" {
+			log.Errorf("FFmpeg stderr: %s", stderrOut)
+		}
+		dbManager.UpdateRecord(job.DriveRoot, job.FileHash, types.Record{
 			OriginalSize: job.OriginalSize,
 			Error:        fmt.Sprintf("rc_%d", rc),
 		})
 		os.Remove(tempPath)
-		stats.mu.Lock()
+		stats.Mu.Lock()
 		stats.FilesErrored++
-		stats.mu.Unlock()
+		stats.Mu.Unlock()
 		return
 	}
 
@@ -779,18 +587,18 @@ func processConversion(job Job, dryRun bool) {
 			return
 		}
 
-		dbManager.updateRecord(job.DriveRoot, job.FileHash, Record{
+		dbManager.UpdateRecord(job.DriveRoot, job.FileHash, types.Record{
 			OriginalSize:  job.OriginalSize,
 			ConvertedSize: newSize,
 			Output:        finalPath,
 		})
 
-		stats.mu.Lock()
+		stats.Mu.Lock()
 		stats.FilesProcessed++
 		stats.FilesImproved++
 		stats.OriginalBytes += job.OriginalSize
 		stats.FinalBytes += newSize
-		stats.mu.Unlock()
+		stats.Mu.Unlock()
 	} else {
 		// DISCARDED - File not improved
 		increase := float64(newSize-job.OriginalSize) / float64(job.OriginalSize) * 100
@@ -804,18 +612,18 @@ func processConversion(job Job, dryRun bool) {
 
 		os.Remove(tempPath)
 
-		dbManager.updateRecord(job.DriveRoot, job.FileHash, Record{
+		dbManager.UpdateRecord(job.DriveRoot, job.FileHash, types.Record{
 			OriginalSize:  job.OriginalSize,
 			ConvertedSize: newSize,
 			Note:          "not_beneficial",
 		})
 
-		stats.mu.Lock()
+		stats.Mu.Lock()
 		stats.FilesProcessed++
 		stats.FilesDiscarded++
 		stats.OriginalBytes += job.OriginalSize
 		stats.FinalBytes += job.OriginalSize
-		stats.mu.Unlock()
+		stats.Mu.Unlock()
 	}
 }
 
@@ -872,265 +680,6 @@ func getFileHash(filePath string, partial bool) (string, float64) {
 	}
 
 	return fmt.Sprintf("%x", hasher.Sum(nil)), 0.0
-}
-
-type VideoInfo struct {
-	Format  string
-	Width   int
-	Height  int
-	CodecID string
-}
-
-func getMediaInfo(filePath string) (*VideoInfo, error) {
-	mediaInfoExe := resolveExecutable(config.MediaInfoPath, "MediaInfo.exe")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, mediaInfoExe, "--output=JSON", filePath)
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Media struct {
-			Track []map[string]interface{} `json:"track"`
-		} `json:"media"`
-	}
-
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, err
-	}
-
-	for _, track := range result.Media.Track {
-		if trackType, ok := track["@type"].(string); ok && trackType == "Video" {
-			info := &VideoInfo{}
-
-			if format, ok := track["Format"].(string); ok {
-				info.Format = format
-			}
-			if codecID, ok := track["CodecID"].(string); ok {
-				info.CodecID = codecID
-			}
-			if width, ok := track["Width"].(string); ok {
-				fmt.Sscanf(width, "%d", &info.Width)
-			}
-			if height, ok := track["Height"].(string); ok {
-				fmt.Sscanf(height, "%d", &info.Height)
-			}
-
-			return info, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no video track found")
-}
-
-func getDuration(filePath string) float64 {
-	ffprobeExe := resolveExecutable(config.FFprobePath, "ffprobe.exe")
-	if ffprobeExe == "" {
-		ffmpegExe := resolveExecutable(config.FFmpegPath, "ffmpeg.exe")
-		ffprobeExe = filepath.Join(filepath.Dir(ffmpegExe), "ffprobe.exe")
-		if _, err := os.Stat(ffprobeExe); err != nil {
-			ffprobeExe, _ = exec.LookPath("ffprobe.exe")
-		}
-	}
-
-	if ffprobeExe == "" {
-		return 0.0
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, ffprobeExe, "-v", "error", "-show_entries", "format=duration", "-of", "json", filePath)
-	output, err := cmd.Output()
-	if err != nil {
-		return 0.0
-	}
-
-	var result struct {
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
-	}
-
-	if err := json.Unmarshal(output, &result); err != nil {
-		return 0.0
-	}
-
-	duration, _ := strconv.ParseFloat(result.Format.Duration, 64)
-	return duration
-}
-
-func isHEVC(format, codecID string) bool {
-	return strings.Contains(strings.ToUpper(format), "HEVC") ||
-		strings.Contains(strings.ToUpper(codecID), "HVC1")
-}
-
-func determineQuality(width int) string {
-	// Check if custom quality values are set
-	if config.CustomQualitySD > 0 && width <= 1024 {
-		return strconv.Itoa(config.CustomQualitySD)
-	}
-	if config.CustomQuality720p > 0 && width <= 1280 {
-		return strconv.Itoa(config.CustomQuality720p)
-	}
-	if config.CustomQuality1080p > 0 && width <= 1920 {
-		return strconv.Itoa(config.CustomQuality1080p)
-	}
-	if config.CustomQuality4K > 0 && width > 1920 {
-		return strconv.Itoa(config.CustomQuality4K)
-	}
-
-	// Use preset if no custom values
-	switch strings.ToLower(config.QualityPreset) {
-	case "high_quality":
-		// Prioritize quality over file size (current default)
-		if width <= 1024 {
-			return "19"
-		} else if width <= 1280 {
-			return "20"
-		} else if width <= 1920 {
-			return "21"
-		}
-		return "23"
-
-	case "balanced":
-		// Balance between quality and file size (recommended)
-		if width <= 1024 {
-			return "23"
-		} else if width <= 1280 {
-			return "25"
-		} else if width <= 1920 {
-			return "27"
-		}
-		return "30"
-
-	case "space_saver":
-		// Prioritize file size over quality
-		if width <= 1024 {
-			return "26"
-		} else if width <= 1280 {
-			return "28"
-		} else if width <= 1920 {
-			return "30"
-		}
-		return "33"
-
-	default:
-		// Default to balanced
-		if width <= 1024 {
-			return "23"
-		} else if width <= 1280 {
-			return "25"
-		} else if width <= 1920 {
-			return "27"
-		}
-		return "30"
-	}
-}
-
-func buildFFmpegArgs(inputPath, outputPath, quality, outputExt string) []string {
-	args := []string{
-		"-hide_banner", "-y", "-nostats",
-		"-progress", "pipe:1",
-		"-i", inputPath,
-		"-c:v", config.VideoEncoder,
-	}
-
-	// Add quality parameter
-	if config.VideoEncoder == "libx265" {
-		args = append(args, "-crf", quality, "-preset", "medium")
-	} else if strings.Contains(config.VideoEncoder, "_nvenc") {
-		args = append(args, "-cq", quality, "-preset", "p5")
-	} else {
-		args = append(args, "-crf", quality)
-	}
-
-	// Handle audio and subtitles based on output format
-	if outputExt == ".mkv" {
-		// MKV: Copy all audio streams, copy all subtitle streams, copy attachments
-		args = append(args,
-			"-c:a", "copy", // Copy all audio streams without re-encoding
-			"-c:s", "copy", // Copy all subtitle streams
-			"-map", "0", // Map all streams from input
-			"-map_metadata", "0", // Copy all metadata
-			"-map_chapters", "0", // Copy chapters
-		)
-	} else {
-		// MP4: Re-encode audio to AAC, add faststart for streaming
-		args = append(args,
-			"-c:a", "aac",
-			"-movflags", "+faststart",
-		)
-	}
-
-	args = append(args, outputPath)
-
-	return args
-}
-
-func runFFmpeg(ffmpegExe string, args []string, filePath string, totalDuration float64) int {
-	cmd := exec.Command(ffmpegExe, args...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Errorf("Failed to create stdout pipe: %v", err)
-		return 999
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Errorf("Failed to start FFmpeg: %v", err)
-		return 999
-	}
-
-	lastPct := -1
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "out_time_ms=") || strings.HasPrefix(line, "out_time_us=") || strings.HasPrefix(line, "out_time=") {
-			parts := strings.Split(line, "=")
-			if len(parts) == 2 {
-				var outTime float64
-				if strings.HasPrefix(line, "out_time_ms=") {
-					if val, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
-						outTime = float64(val) / 1000000.0
-					}
-				} else if strings.HasPrefix(line, "out_time_us=") {
-					if val, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
-						outTime = float64(val) / 1000000.0
-					}
-				} else if strings.HasPrefix(line, "out_time=") {
-					// Parse HH:MM:SS.mmm
-					timeParts := strings.Split(parts[1], ":")
-					if len(timeParts) == 3 {
-						h, _ := strconv.Atoi(timeParts[0])
-						m, _ := strconv.Atoi(timeParts[1])
-						s, _ := strconv.ParseFloat(timeParts[2], 64)
-						outTime = float64(h*3600+m*60) + s
-					}
-				}
-
-				if totalDuration > 0 && outTime > 0 {
-					pct := int(100 * outTime / totalDuration)
-					if pct > lastPct && (pct%10 == 0 || pct == 100) {
-						log.Infof("Progress: %d%%", pct)
-						lastPct = pct
-					}
-				}
-			}
-		}
-	}
-
-	if err := cmd.Wait(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
-		}
-		return 999
-	}
-
-	return 0
 }
 
 func getDriveRoot(filePath string) string {
@@ -1190,110 +739,9 @@ func sanitizeFolderName(name string) string {
 	return filepath.Join(parts...)
 }
 
-func resolveExecutable(configPath, exeName string) string {
-	if configPath == "" {
-		exe, _ := exec.LookPath(exeName)
-		return exe
-	}
-
-	var path string
-	if filepath.IsAbs(configPath) {
-		path = configPath
-	} else {
-		path = filepath.Join(execDir, configPath)
-	}
-
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-
-	// Try PATH
-	exe, _ := exec.LookPath(exeName)
-	return exe
-}
-
-func (db *DatabaseManager) getRecord(driveRoot, fileHash string) *Record {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	if db.dbs[driveRoot] == nil {
-		db.mu.RUnlock()
-		db.mu.Lock()
-		db.loadDB(driveRoot)
-		db.mu.Unlock()
-		db.mu.RLock()
-	}
-
-	if rec, ok := db.dbs[driveRoot][fileHash]; ok {
-		return &rec
-	}
-	return nil
-}
-
-func (db *DatabaseManager) updateRecord(driveRoot, fileHash string, rec Record) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	if db.dbs[driveRoot] == nil {
-		db.loadDB(driveRoot)
-	}
-
-	db.dbs[driveRoot][fileHash] = rec
-	db.dirty[driveRoot] = true
-}
-
-func (db *DatabaseManager) loadDB(driveRoot string) {
-	dbPath := filepath.Join(driveRoot, "converted_files.json")
-	data, err := os.ReadFile(dbPath)
-	if err != nil {
-		db.dbs[driveRoot] = make(map[string]Record)
-		return
-	}
-
-	var records map[string]Record
-	if err := json.Unmarshal(data, &records); err != nil {
-		db.dbs[driveRoot] = make(map[string]Record)
-		return
-	}
-
-	db.dbs[driveRoot] = records
-}
-
-func (db *DatabaseManager) saveAll() {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	for driveRoot, isDirty := range db.dirty {
-		if !isDirty {
-			continue
-		}
-
-		dbPath := filepath.Join(driveRoot, "converted_files.json")
-		tmpPath := dbPath + ".tmp"
-
-		data, err := json.MarshalIndent(db.dbs[driveRoot], "", "  ")
-		if err != nil {
-			log.Errorf("Failed to marshal DB for %s: %v", driveRoot, err)
-			continue
-		}
-
-		if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-			log.Errorf("Failed to write DB temp file for %s: %v", driveRoot, err)
-			continue
-		}
-
-		if err := os.Rename(tmpPath, dbPath); err != nil {
-			log.Errorf("Failed to rename DB file for %s: %v", driveRoot, err)
-			continue
-		}
-
-		db.dirty[driveRoot] = false
-	}
-}
-
 func printStats() {
-	stats.mu.Lock()
-	defer stats.mu.Unlock()
+	stats.Mu.Lock()
+	defer stats.Mu.Unlock()
 
 	log.Info("")
 	log.Info("╔════════════════════════════════════════════════════════════════╗")
@@ -1348,12 +796,12 @@ func truncateString(s string, maxLen int) string {
 }
 
 func openHSortedFolders() {
-	stats.mu.Lock()
+	stats.Mu.Lock()
 	drives := make([]string, 0, len(stats.TouchedDrives))
 	for drive := range stats.TouchedDrives {
 		drives = append(drives, drive)
 	}
-	stats.mu.Unlock()
+	stats.Mu.Unlock()
 
 	for _, drive := range drives {
 		hsortedPath := filepath.Join(drive, "HSORTED")
