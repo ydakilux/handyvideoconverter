@@ -21,7 +21,11 @@ import (
 
 	cfgpkg "video-converter/internal/config"
 	"video-converter/internal/database"
+	"video-converter/internal/encoder"
+	"video-converter/internal/fallback"
 	"video-converter/internal/ffmpeg"
+	"video-converter/internal/gpu/benchmark"
+	"video-converter/internal/gpu/detect"
 	"video-converter/internal/logging"
 	"video-converter/internal/types"
 )
@@ -34,6 +38,10 @@ var (
 	stats               types.Stats
 	execDir             string
 	outputDriveOverride string // If set, use this drive instead of source drive
+	selectedEncoder     encoder.Encoder
+	encoderRegistry     *encoder.Registry
+	fbManager           *fallback.FallbackManager
+	configFilePath      string // saved for benchmark cache operations
 )
 
 func main() {
@@ -90,6 +98,93 @@ func main() {
 	} else if config.VideoEncoder == "" {
 		config.VideoEncoder = "auto"
 	}
+
+	// Apply GPU defaults to config
+	cfgpkg.ApplyGPUDefaults(&config)
+
+	// Save config path for benchmark cache
+	configFilePath = configPath
+
+	// Resolve FFmpeg path for GPU detection
+	ffmpegExe := cfgpkg.ResolveExecutable(config.FFmpegPath, "ffmpeg.exe", execDir)
+
+	// GPU detection and encoder selection
+	encoderRegistry = encoder.NewRegistry()
+	encoderRegistry.Register(encoder.NewLibx265Encoder())
+	encoderRegistry.Register(encoder.NewNvencEncoder())
+	encoderRegistry.Register(encoder.NewAmfEncoder())
+	encoderRegistry.Register(encoder.NewQsvEncoder())
+
+	if config.VideoEncoder == "auto" {
+		log.Info("Auto-detecting GPU encoders...")
+		detectionResult, err := detect.DetectEncoders(ffmpegExe, log)
+		if err != nil {
+			log.Warnf("GPU detection failed: %v — falling back to libx265", err)
+			config.VideoEncoder = "libx265"
+		} else {
+			best := detect.SelectBest(detectionResult)
+			config.VideoEncoder = best.Encoder
+			log.Infof("Detected GPU: %s (encoder: %s)", best.Name, best.Encoder)
+
+			// Log all detected encoders
+			for _, gpu := range detectionResult.Available {
+				status := "unavailable"
+				if gpu.Available {
+					status = "available"
+				}
+				log.Debugf("  %s (%s): %s", gpu.Name, gpu.Encoder, status)
+			}
+		}
+	}
+
+	if enc, ok := encoderRegistry.Get(config.VideoEncoder); ok {
+		selectedEncoder = enc
+	} else {
+		log.Warnf("Unknown encoder %q, falling back to libx265", config.VideoEncoder)
+		selectedEncoder, _ = encoderRegistry.Get("libx265")
+		config.VideoEncoder = "libx265"
+	}
+	log.Infof("Selected encoder: %s", config.VideoEncoder)
+
+	// Benchmark (for GPU encoders only)
+	if config.VideoEncoder != "libx265" {
+		cacheKey := benchmark.CacheKey(config.VideoEncoder, "", "")
+
+		var haveCachedBenchmark bool
+		if !config.Rebenchmark {
+			cache, err := benchmark.LoadCache(configFilePath)
+			if err == nil && benchmark.IsCacheValid(cache, cacheKey) {
+				cachedResult := cache.Results[cacheKey]
+				log.Infof("Using cached benchmark: %.1f FPS for %s", cachedResult.FPS, config.VideoEncoder)
+				haveCachedBenchmark = true
+			}
+		}
+
+		if !haveCachedBenchmark {
+			log.Info("Running GPU benchmark...")
+			qualityArgs := selectedEncoder.QualityArgs(config.QualityPreset, 1920)
+			result, err := benchmark.RunBenchmark(ffmpegExe, config.VideoEncoder, 0, qualityArgs, log)
+			if err != nil {
+				log.Warnf("Benchmark failed: %v — proceeding without speed data", err)
+			} else {
+				log.Infof("Benchmark: %s @ %.1f FPS (%.2fx realtime)", config.VideoEncoder, result.FPS, result.SpeedX)
+
+				// Save to cache
+				cache, _ := benchmark.LoadCache(configFilePath)
+				if cache == nil {
+					cache = &benchmark.BenchmarkCache{Results: make(map[string]benchmark.BenchmarkResult), Version: "1"}
+				}
+				result.CacheKey = cacheKey
+				cache.Results[cacheKey] = *result
+				if err := benchmark.SaveCache(configFilePath, cache); err != nil {
+					log.Warnf("Failed to save benchmark cache: %v", err)
+				}
+			}
+		}
+	}
+
+	// Create FallbackManager for GPU error recovery
+	fbManager = fallback.NewFallbackManager(!config.NonInteractive, os.Stdin, log)
 
 	// Interactive prompts if not specified
 	if !contains(os.Args, "--bypass") {
@@ -520,14 +615,27 @@ func processConversion(job types.Job, dryRun bool) {
 
 	tempPath := filepath.Join(tempDir, fmt.Sprintf("__tmp__%s%s", hash8, outputExt))
 
-	// Build FFmpeg command
-	quality := cfgpkg.DetermineQuality(job.Width, config)
-	args := ffmpeg.BuildArgs(job.FilePath, tempPath, quality, outputExt, config.VideoEncoder)
-
+	// Build FFmpeg command using encoder's quality/device args
+	qualityArgs := selectedEncoder.QualityArgs(config.QualityPreset, job.Width)
+	deviceArgs := selectedEncoder.DeviceArgs(job.GPUIndex)
+	args := buildConversionArgs(job.FilePath, tempPath, outputExt, config.VideoEncoder, qualityArgs, deviceArgs)
 	// Run FFmpeg
 	ffmpegExe := cfgpkg.ResolveExecutable(config.FFmpegPath, "ffmpeg.exe", execDir)
 	rc, stderrOut := ffmpeg.Run(ffmpegExe, args, job.FilePath, job.DurationSeconds, log)
-
+	// Handle GPU failure with fallback
+	if rc != 0 && config.VideoEncoder != "libx265" {
+		shouldFallback, fbErr := fbManager.HandleGPUError(stderrOut, selectedEncoder, &jobStringer{job})
+		if fbErr != nil {
+			log.Warnf("Fallback error: %v", fbErr)
+		}
+		if shouldFallback {
+			log.Info("Falling back to CPU encoder (libx265)...")
+			cpuEncoder, _ := encoderRegistry.Get("libx265")
+			cpuQualityArgs := cpuEncoder.QualityArgs(config.QualityPreset, job.Width)
+			cpuArgs := buildConversionArgs(job.FilePath, tempPath, outputExt, "libx265", cpuQualityArgs, nil)
+			rc, stderrOut = ffmpeg.Run(ffmpegExe, cpuArgs, job.FilePath, job.DurationSeconds, log)
+		}
+	}
 	if rc != 0 {
 		log.Errorf("FFmpeg failed with exit code %d for %s", rc, job.FilePath)
 		if stderrOut != "" {
@@ -822,4 +930,49 @@ func openHSortedFolders() {
 			cmd.Start()
 		}
 	}
+}
+
+
+// jobStringer wraps a types.Job to implement fmt.Stringer for FallbackManager.
+type jobStringer struct {
+	job types.Job
+}
+
+func (js *jobStringer) String() string {
+	return filepath.Base(js.job.FilePath)
+}
+
+// buildConversionArgs constructs FFmpeg arguments using encoder-specific quality and device args.
+func buildConversionArgs(inputPath, outputPath, outputExt, encoderName string, qualityArgs, deviceArgs []string) []string {
+	args := []string{
+		"-hide_banner", "-y", "-nostats",
+		"-progress", "pipe:1",
+		"-i", inputPath,
+	}
+
+	// Add device selection args (e.g., -hwaccel_device 0 for NVENC)
+	if len(deviceArgs) > 0 {
+		args = append(args, deviceArgs...)
+	}
+
+	args = append(args, "-c:v", encoderName)
+	args = append(args, qualityArgs...)
+
+	if outputExt == ".mkv" {
+		args = append(args,
+			"-c:a", "copy",
+			"-c:s", "copy",
+			"-map", "0",
+			"-map_metadata", "0",
+			"-map_chapters", "0",
+		)
+	} else {
+		args = append(args,
+			"-c:a", "aac",
+			"-movflags", "+faststart",
+		)
+	}
+
+	args = append(args, outputPath)
+	return args
 }
