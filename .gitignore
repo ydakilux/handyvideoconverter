@@ -45,7 +45,7 @@ dist/
 # Downloaded executables and tools
 HandBrakeCLI*/
 MediaInfo*/
-ffmpeg*/
+/ffmpeg*/
 
 # Database/cache files
 converted_files.json
