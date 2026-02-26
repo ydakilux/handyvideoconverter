@@ -1,20 +1,46 @@
 # Video Converter
 
-A high-performance CLI batch video conversion tool for Windows that converts videos to HEVC/H.265 format with intelligent caching, concurrent processing, and detailed conversion reporting.
+A high-performance CLI batch video conversion tool for Windows that converts videos to HEVC/H.265 format with GPU auto-detection, intelligent caching, concurrent processing, and detailed conversion reporting.
 
 ## ✨ Key Features
 
 - **🎬 Batch Conversion** - Process entire directories of videos automatically
 - **⚡ HEVC/H.265 Encoding** - Significant file size reduction with maintained quality
+- **🖥️ GPU Auto-Detection** - Automatically finds and uses the best available hardware encoder
 - **🔄 Smart Caching** - Per-drive BLAKE3 hash-based cache prevents re-processing
 - **🚀 Concurrent Processing** - Producer-consumer pipeline for efficient batch operations
 - **📊 Detailed Reporting** - Per-file conversion statistics with size comparisons
 - **🎯 Quality Presets** - Configurable quality settings (high_quality, balanced, space_saver)
 - **📁 Directory Preservation** - Maintains folder structure from dropped directory onwards
 - **🧹 Smart Output** - Only creates directories when conversions succeed
-- **🎮 Multiple Encoders** - Support for libx265, nvenc_hevc, and more
+- **🎮 Multiple Encoders** - NVIDIA NVENC, AMD AMF, Intel QSV, and CPU libx265
 - **📝 Optional Seq Logging** - Integration with Seq for centralized logging
 - **🖥️ Windows Optimized** - Auto-opens output folders after completion
+
+## 🖥️ GPU Auto-Detection
+
+The tool automatically detects your GPU and picks the fastest available encoder:
+
+1. **Probes hardware** at startup for NVIDIA NVENC, AMD AMF, and Intel QSV support
+2. **Trial-encodes a short clip** to verify the encoder actually works (not just reported as available)
+3. **Benchmarks GPU speed** and caches results so future runs start instantly
+4. **Falls back to CPU** (`libx265`) if no working GPU encoder is found
+
+You don't need to configure anything. Just run the tool and it picks the best option. If you want a specific encoder, use `--encoder` to override.
+
+### Supported Encoders
+
+| Encoder | Hardware | Quality Flag | Speed | Notes |
+|---------|----------|-------------|-------|-------|
+| `auto` | (detect) | (varies) | Best available | **Default.** Picks the fastest working encoder |
+| `hevc_nvenc` | NVIDIA GPU | `-cq` | Fastest | Requires NVIDIA drivers with NVENC support |
+| `hevc_amf` | AMD GPU | `-qp_i`/`-qp_p` | Fast | Requires AMD drivers with AMF support |
+| `hevc_qsv` | Intel GPU | `-global_quality` | Fast | Requires Intel GPU with Quick Sync |
+| `libx265` | CPU | `-crf` | Slowest | Always available, most compatible |
+
+### Multi-GPU (NVIDIA)
+
+When multiple NVIDIA GPUs are detected, the tool distributes encoding across them based on benchmark speed. Each GPU gets work proportional to its throughput. AMD and Intel don't support device selection through FFmpeg, so multi-GPU only applies to NVIDIA setups.
 
 ## 🚀 Quick Start
 
@@ -54,7 +80,7 @@ A high-performance CLI batch video conversion tool for Windows that converts vid
 - **Windows** (tested on Windows 10/11)
 - **FFmpeg** - Place in `ffmpeg\bin\` relative to exe, or configure path
 - **MediaInfo CLI** - Place in `MediaInfo_CLI_24.04_Windows_x64\` or configure path
-- **NVIDIA GPU** (optional) - For hardware-accelerated encoding with `hevc_nvenc`
+- **GPU** (optional) - NVIDIA, AMD, or Intel GPU for hardware-accelerated encoding. Falls back to CPU automatically if no GPU is available.
 
 ## 📦 Installation
 
@@ -82,9 +108,23 @@ go build -ldflags="-s -w" -o video-converter.exe
 
 ## 🎯 Usage
 
+### Command Line Flags
+
+```
+video-converter.exe [flags] <directory>
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `configVideoConversion.json` | Path to config file |
+| `--dry-run` | `false` | Preview mode, no actual conversion |
+| `--encoder` | `auto` | Encoder selection: `auto`, `hevc_nvenc`, `hevc_amf`, `hevc_qsv`, `libx265` |
+| `--non-interactive` | `false` | Disable interactive prompts (auto-fallback to CPU on GPU failure) |
+| `--rebenchmark` | `false` | Force GPU benchmark even if cached results exist |
+
 ### Basic Usage
 ```bash
-# Convert all videos in a directory
+# Convert all videos in a directory (auto-detects best encoder)
 video-converter.exe D:\Videos\
 
 # Dry run (preview without converting)
@@ -93,8 +133,14 @@ video-converter.exe --dry-run D:\Videos\
 # Use custom config
 video-converter.exe --config myconfig.json D:\Videos\
 
-# Override encoder
+# Force a specific encoder
 video-converter.exe --encoder libx265 D:\Videos\
+
+# Non-interactive mode (good for scripts/scheduled tasks)
+video-converter.exe --non-interactive D:\Videos\
+
+# Re-run GPU benchmark
+video-converter.exe --rebenchmark D:\Videos\
 ```
 
 ### Interactive Prompts
@@ -112,13 +158,15 @@ When you run the tool, it will ask:
    - Press Enter: Output to same drive as source (`D:\HSORTED\`)
    - Specify drive: Output to different drive (`E:\` → `E:\HSORTED\`)
 
+When a GPU encoder fails mid-conversion, the tool asks whether to retry with CPU encoding. Use `--non-interactive` to skip this prompt and auto-fallback.
+
 ## ⚙️ Configuration
 
 The tool auto-creates `configVideoConversion.json` on first run. Key settings:
 
 ```json
 {
-  "video_encoder": "hevc_nvenc",
+  "video_encoder": "auto",
   "quality_preset": "balanced",
   "max_queue_size": 3,
   "use_partial_hash": true
@@ -135,7 +183,7 @@ The tool auto-creates `configVideoConversion.json` on first run. Key settings:
 
 **Tip:** If files are getting larger, change to `"space_saver"` preset.
 
-See [QUALITY_SETTINGS.md](QUALITY_SETTINGS.md) for detailed quality configuration.
+See [QUALITY_SETTINGS.md](QUALITY_SETTINGS.md) for detailed quality configuration, including per-encoder quality parameters.
 
 ## 📁 Output Structure
 
@@ -204,6 +252,15 @@ video-converter.exe C:\Videos\
 # Output will be: E:\HSORTED\Videos\...
 ```
 
+### Scenario 5: Automated/Scripted Conversion
+Run from a script without any interactive prompts:
+
+```bash
+video-converter.exe --non-interactive --encoder auto D:\Videos\
+# GPU auto-detection with automatic CPU fallback on failure
+# No user interaction needed
+```
+
 ## 🔧 Troubleshooting
 
 ### Files are getting LARGER after conversion
@@ -220,7 +277,7 @@ video-converter.exe C:\Videos\
 **Problem:** Videos may already be optimally compressed.
 
 **Solution:** 
-- This is normal - original files are already efficient
+- This is normal. Original files are already efficient.
 - Use `--force-hevc` flag to re-encode anyway (may not improve size)
 
 ### FFmpeg not found
@@ -243,15 +300,32 @@ video-converter.exe C:\Videos\
 }
 ```
 
-### NVIDIA encoding errors
-**Problem:** GPU encoding fails or not available.
+### GPU encoding fails
+**Problem:** GPU encoder not available or errors during encoding.
 
-**Solution:** Switch to CPU encoding:
+**Solution:** The tool auto-falls back to CPU when `--encoder auto` is set. To force CPU encoding:
+```bash
+video-converter.exe --encoder libx265 D:\Videos\
+```
+Or in config:
 ```json
 {
   "video_encoder": "libx265"
 }
 ```
+
+### GPU benchmark is slow or stale
+**Problem:** First run takes extra time for benchmarking, or cached benchmark results are outdated.
+
+**Solution:** Benchmark results are cached after the first run, so subsequent launches are fast. To force a fresh benchmark:
+```bash
+video-converter.exe --rebenchmark D:\Videos\
+```
+
+### Multi-GPU not distributing work
+**Problem:** Only one GPU is being used.
+
+**Solution:** Multi-GPU distribution only works with NVIDIA GPUs. AMD and Intel encoders don't support device selection through FFmpeg. Make sure you have multiple NVIDIA GPUs with up-to-date drivers.
 
 ## 📊 Conversion Statistics
 
@@ -276,12 +350,16 @@ After processing, you'll see a comprehensive summary:
 
 ## 🏗️ Architecture
 
+- **GPU Auto-Detection** - Trial-encode verification ensures encoder actually works before use
+- **Encoder-Specific Quality** - Each encoder gets its own quality normalization (CRF, CQ, QP, global_quality)
+- **Fallback Manager** - GPU error recovery with interactive or automatic CPU fallback
 - **Producer-Consumer Pipeline** - Concurrent file processing with configurable queue size
 - **BLAKE3 Hashing** - Fast file identification (partial or full hash)
 - **Per-Drive Caching** - JSON database at drive root (`D:\converted_files.json`)
 - **Atomic File Operations** - Safe writes with temp files and rename
 - **Thread-Safe Database** - RWMutex for concurrent access
 - **Smart Progress Reporting** - FFmpeg progress parsing via stdout
+- **Multi-GPU Distribution** - Speed-balanced work distribution across NVIDIA GPUs
 
 ## 🤝 Contributing
 

@@ -1,5 +1,54 @@
 # Video Converter - Recent Improvements
 
+
+## GPU Adaptive Encoding (Feb 2026)
+
+### GPU Auto-Detection
+- Automatically detects and selects the best available hardware encoder at startup
+- Trial-encode verification ensures the encoder actually works, not just reported as available
+- Falls back to CPU (`libx265`) if no working GPU encoder is found
+- Interactive or automatic fallback when GPU encoding fails mid-conversion
+
+### Multi-Encoder Support
+- **NVIDIA NVENC** (`hevc_nvenc`): uses `-cq` quality flag with presets p4/p5/p7
+- **AMD AMF** (`hevc_amf`): uses `-rc cqp -qp_i/-qp_p` with quality presets balanced/quality/speed
+- **Intel QSV** (`hevc_qsv`): uses `-global_quality` (ICQ mode) with presets faster/medium/veryslow
+- **CPU libx265**: uses `-crf` with presets faster/medium/slow
+
+### GPU Benchmarking
+- Measures GPU encoding speed at startup using a short trial encode
+- Caches benchmark results so subsequent runs skip the benchmark step
+- Use `--rebenchmark` to force a fresh benchmark if results are stale
+
+### Encoder-Specific Quality Normalization
+Each encoder uses its own quality parameter tuned per resolution:
+- NVENC: `-cq` values (20-35 depending on preset and resolution)
+- AMF: `-qp_i`/`-qp_p` values (16-31 depending on preset and resolution)
+- QSV: `-global_quality` values (17-33 depending on preset and resolution)
+- libx265: `-crf` values (19-33 depending on preset and resolution)
+
+### New CLI Flags
+- `--encoder auto` (now the default): auto-detect best available encoder
+- `--non-interactive`: disable interactive prompts, auto-fallback to CPU on GPU failure
+- `--rebenchmark`: force GPU benchmark even if cached results exist
+
+### Multi-GPU Distribution
+- NVIDIA GPUs distributed speed-balanced based on benchmark results
+- Each GPU gets work proportional to its throughput
+- AMD and Intel: single-GPU only (FFmpeg doesn't support device selection for these encoders)
+
+### Code Reorganization
+- Full package refactor: code reorganized into `internal/` packages
+- `internal/encoder/`: encoder interface and per-encoder implementations
+- `internal/config/`, `internal/database/`, `internal/conversion/`, `internal/discovery/`
+- `internal/gpu/`: GPU detection, benchmarking, and fallback management
+
+### Bug Fixes
+- Fixed database lock promotion race condition (RLock to Lock upgrade)
+- Comprehensive TDD test suite for all new packages
+
+---
+
 ## Changes Made (Feb 11, 2026)
 
 ### 1. Removed Progress Bar Conflicts
