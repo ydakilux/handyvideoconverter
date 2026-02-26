@@ -39,11 +39,13 @@ var (
 func main() {
 	// Parse flags
 	var (
-		configFile  = flag.String("config", "configVideoConversion.json", "Path to config file")
-		dryRun      = flag.Bool("dry-run", false, "Dry run mode")
-		bypass      bool
-		forceHevc   bool
-		encoderFlag = flag.String("encoder", "", "Override video encoder")
+		configFile     = flag.String("config", "configVideoConversion.json", "Path to config file")
+		dryRun         = flag.Bool("dry-run", false, "Dry run mode")
+		bypass         bool
+		forceHevc      bool
+		encoderFlag    = flag.String("encoder", "auto", "Video encoder (auto, hevc_nvenc, hevc_amf, hevc_qsv, libx265)")
+		nonInteractive = flag.Bool("non-interactive", false, "Disable interactive prompts for GPU fallback")
+		rebenchmark    = flag.Bool("rebenchmark", false, "Force GPU benchmark even if cache exists")
 	)
 	flag.Parse()
 
@@ -74,9 +76,19 @@ func main() {
 	log, logCleanup = logging.SetupLogging(config.ServerURL, config.APIKey, config.LogLevel, execDir)
 	defer logCleanup()
 
-	// Override encoder if specified
-	if *encoderFlag != "" {
+	// Apply CLI flag overrides to config
+	if *nonInteractive {
+		config.NonInteractive = true
+	}
+	if *rebenchmark {
+		config.Rebenchmark = true
+	}
+
+	// Override encoder if explicitly specified via CLI flag
+	if *encoderFlag != "auto" {
 		config.VideoEncoder = *encoderFlag
+	} else if config.VideoEncoder == "" {
+		config.VideoEncoder = "auto"
 	}
 
 	// Interactive prompts if not specified
