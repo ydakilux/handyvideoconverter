@@ -151,3 +151,45 @@ func ResolveExecutable(configPath, exeName, execDir string) string {
 	exe, _ := exec.LookPath(exeName)
 	return exe
 }
+
+
+// ApplyGPUDefaults sets default values for GPU-related config fields.
+// Only sets defaults when fields are at their zero value.
+func ApplyGPUDefaults(cfg *types.Config) {
+	if cfg.MaxEncodesPerGPU == 0 {
+		cfg.MaxEncodesPerGPU = 2
+	}
+}
+
+// SaveBenchmarkCache updates a benchmark cache entry and persists the full config to disk.
+// Uses atomic write (.tmp + rename) for safety.
+func SaveBenchmarkCache(configPath string, cfg *types.Config, key string, entry types.BenchmarkCacheEntry) error {
+	if cfg.BenchmarkCache == nil {
+		cfg.BenchmarkCache = make(map[string]types.BenchmarkCacheEntry)
+	}
+	cfg.BenchmarkCache[key] = entry
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		return fmt.Errorf("rename temp config: %w", err)
+	}
+	return nil
+}
+
+// GetBenchmarkCache retrieves a benchmark cache entry by key.
+// Returns the entry and true if found, or zero value and false if not.
+func GetBenchmarkCache(cfg *types.Config, key string) (types.BenchmarkCacheEntry, bool) {
+	if cfg.BenchmarkCache == nil {
+		return types.BenchmarkCacheEntry{}, false
+	}
+	entry, ok := cfg.BenchmarkCache[key]
+	return entry, ok
+}

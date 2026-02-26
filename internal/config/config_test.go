@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"video-converter/internal/types"
 )
@@ -297,5 +299,173 @@ func TestResolveExecutableRelativePath(t *testing.T) {
 	result := ResolveExecutable(filepath.Join("bin", "ffmpeg.exe"), "ffmpeg.exe", dir)
 	if result != fakePath {
 		t.Errorf("expected %q, got %q", fakePath, result)
+	}
+}
+
+
+func TestConfigBackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "old_config.json")
+
+	// JSON without any GPU fields (simulates old config format)
+	oldJSON := `{
+	  "server_url": "http://localhost:5341/",
+	  "api_key": "",
+	  "use_partial_hash": true,
+	  "max_queue_size": 3,
+	  "video_encoder": "hevc_nvenc",
+	  "quality_preset": "balanced",
+	  "file_extensions": [".MP4", ".MKV"],
+	  "log_level": "INFO"
+	}`
+	if err := os.WriteFile(cfgPath, []byte(oldJSON), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig with old format should succeed, got: %v", err)
+	}
+
+	// GPU fields should be at zero values
+	if cfg.MaxEncodesPerGPU != 0 {
+		t.Errorf("MaxEncodesPerGPU = %d, want 0", cfg.MaxEncodesPerGPU)
+	}
+	if cfg.NonInteractive {
+		t.Error("NonInteractive should be false")
+	}
+	if cfg.GPUPreset != "" {
+		t.Errorf("GPUPreset = %q, want empty", cfg.GPUPreset)
+	}
+	if cfg.BenchmarkCache != nil {
+		t.Errorf("BenchmarkCache should be nil, got %v", cfg.BenchmarkCache)
+	}
+	if cfg.Rebenchmark {
+		t.Error("Rebenchmark should be false")
+	}
+}
+
+func TestApplyGPUDefaults(t *testing.T) {
+	// Zero value → should be set to default
+	cfg := types.Config{}
+	ApplyGPUDefaults(&cfg)
+	if cfg.MaxEncodesPerGPU != 2 {
+		t.Errorf("MaxEncodesPerGPU = %d, want 2", cfg.MaxEncodesPerGPU)
+	}
+
+	// Non-zero value → should be preserved
+	cfg2 := types.Config{MaxEncodesPerGPU: 5}
+	ApplyGPUDefaults(&cfg2)
+	if cfg2.MaxEncodesPerGPU != 5 {
+		t.Errorf("MaxEncodesPerGPU = %d, want 5 (preserved)", cfg2.MaxEncodesPerGPU)
+	}
+}
+
+func TestBenchmarkCacheRoundTrip(t *testing.T) {
+	cfg := types.Config{}
+	now := time.Now().Truncate(time.Second)
+	entry := types.BenchmarkCacheEntry{
+		FPS:         120.5,
+		Timestamp:   now,
+		EncoderName: "hevc_nvenc",
+	}
+
+	// Save to in-memory config (no file needed for this test)
+	if cfg.BenchmarkCache == nil {
+		cfg.BenchmarkCache = make(map[string]types.BenchmarkCacheEntry)
+	}
+	cfg.BenchmarkCache["gpu0_hevc_nvenc"] = entry
+
+	got, ok := GetBenchmarkCache(&cfg, "gpu0_hevc_nvenc")
+	if !ok {
+		t.Fatal("GetBenchmarkCache returned false for existing key")
+	}
+	if got.FPS != entry.FPS {
+		t.Errorf("FPS = %f, want %f", got.FPS, entry.FPS)
+	}
+	if !got.Timestamp.Equal(entry.Timestamp) {
+		t.Errorf("Timestamp = %v, want %v", got.Timestamp, entry.Timestamp)
+	}
+	if got.EncoderName != entry.EncoderName {
+		t.Errorf("EncoderName = %q, want %q", got.EncoderName, entry.EncoderName)
+	}
+}
+
+func TestRebenchmarkNotPersisted(t *testing.T) {
+	cfg := types.Config{
+		VideoEncoder: "hevc_nvenc",
+		Rebenchmark:  true,
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	jsonStr := string(data)
+	if strings.Contains(jsonStr, "rebenchmark") {
+		t.Errorf("JSON should not contain rebenchmark, got: %s", jsonStr)
+	}
+}
+
+func TestSaveBenchmarkCachePersistence(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "persist_config.json")
+
+	cfg := types.Config{
+		VideoEncoder:   "hevc_nvenc",
+		FileExtensions: []string{".MP4"},
+	}
+	// Write initial config
+	initData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, initData, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	entry := types.BenchmarkCacheEntry{
+		FPS:         95.3,
+		Timestamp:   now,
+		EncoderName: "hevc_nvenc",
+	}
+
+	if err := SaveBenchmarkCache(cfgPath, &cfg, "gpu0", entry); err != nil {
+		t.Fatalf("SaveBenchmarkCache: %v", err)
+	}
+
+	// Reload from disk
+	loaded, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig after save: %v", err)
+	}
+	if loaded.BenchmarkCache == nil {
+		t.Fatal("BenchmarkCache is nil after reload")
+	}
+	got, ok := loaded.BenchmarkCache["gpu0"]
+	if !ok {
+		t.Fatal("gpu0 key not found in reloaded BenchmarkCache")
+	}
+	if got.FPS != entry.FPS {
+		t.Errorf("FPS = %f, want %f", got.FPS, entry.FPS)
+	}
+	if got.EncoderName != entry.EncoderName {
+		t.Errorf("EncoderName = %q, want %q", got.EncoderName, entry.EncoderName)
+	}
+}
+
+func TestGetBenchmarkCacheMissing(t *testing.T) {
+	// nil map
+	cfg := types.Config{}
+	_, ok := GetBenchmarkCache(&cfg, "nonexistent")
+	if ok {
+		t.Error("GetBenchmarkCache should return false for nil map")
+	}
+
+	// initialized map but missing key
+	cfg.BenchmarkCache = make(map[string]types.BenchmarkCacheEntry)
+	_, ok = GetBenchmarkCache(&cfg, "nonexistent")
+	if ok {
+		t.Error("GetBenchmarkCache should return false for missing key")
 	}
 }
