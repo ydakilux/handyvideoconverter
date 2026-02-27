@@ -32,7 +32,7 @@ func (m *mockGPUEncoder) QualityArgs(preset string, width int) []string {
 }
 
 func (m *mockGPUEncoder) DeviceArgs(gpuIndex int) []string {
-	return []string{"-hwaccel_device", "0"}
+	return []string{"-gpu", "0"}
 }
 
 func (m *mockGPUEncoder) IsAvailable(ffmpegPath string) bool { return false }

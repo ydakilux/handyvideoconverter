@@ -27,7 +27,7 @@ func (e *NvencEncoder) QualityArgs(preset string, width int) []string {
 }
 
 func (e *NvencEncoder) DeviceArgs(gpuIndex int) []string {
-	return []string{"-hwaccel_device", strconv.Itoa(gpuIndex)}
+	return []string{"-gpu", strconv.Itoa(gpuIndex)}
 }
 
 func (e *NvencEncoder) IsAvailable(ffmpegPath string) bool {

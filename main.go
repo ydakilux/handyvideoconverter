@@ -984,7 +984,7 @@ func buildConversionArgs(inputPath, outputPath, outputExt, encoderName string, q
 		"-i", inputPath,
 	}
 
-	// Add device selection args (e.g., -hwaccel_device 0 for NVENC)
+	// Add device selection args (e.g., -gpu 0 for NVENC)
 	if len(deviceArgs) > 0 {
 		args = append(args, deviceArgs...)
 	}

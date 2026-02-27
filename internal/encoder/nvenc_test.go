@@ -71,9 +71,9 @@ func TestNvencDeviceArgs(t *testing.T) {
 		gpuIndex int
 		want     []string
 	}{
-		{"gpu_0", 0, []string{"-hwaccel_device", "0"}},
-		{"gpu_1", 1, []string{"-hwaccel_device", "1"}},
-		{"gpu_2", 2, []string{"-hwaccel_device", "2"}},
+		{"gpu_0", 0, []string{"-gpu", "0"}},
+		{"gpu_1", 1, []string{"-gpu", "1"}},
+		{"gpu_2", 2, []string{"-gpu", "2"}},
 	}
 
 	for _, tt := range tests {
