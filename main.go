@@ -511,11 +511,11 @@ func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- t
 				}
 			}
 
-			// Get MediaInfo
-			mediaInfoExe := cfgpkg.ResolveExecutable(config.MediaInfoPath, "MediaInfo.exe", execDir)
-			videoInfo, err := ffmpeg.GetMediaInfo(filePath, mediaInfoExe)
+			// Get video info via ffprobe
+			ffprobeExe := resolveFFprobeExe()
+			videoInfo, err := ffmpeg.GetMediaInfo(filePath, ffprobeExe)
 			if err != nil {
-				log.Warnf("Failed to get MediaInfo for %s: %v", filePath, err)
+				log.Warnf("Failed to get video info for %s: %v", filePath, err)
 				stats.Mu.Lock()
 				stats.FilesErrored++
 				stats.Mu.Unlock()
@@ -544,7 +544,7 @@ func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- t
 			}
 
 			// Get duration via FFprobe
-			ffprobeExe := resolveFFprobeExe()
+			ffprobeExe = resolveFFprobeExe()
 			duration := ffmpeg.GetDuration(filePath, ffprobeExe, log)
 
 			// Enqueue job

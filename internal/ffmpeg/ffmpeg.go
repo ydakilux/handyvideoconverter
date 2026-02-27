@@ -166,48 +166,43 @@ func GetDuration(filePath, ffprobeExe string, logger *logrus.Logger) float64 {
 	return duration
 }
 
-func GetMediaInfo(filePath, mediaInfoExe string) (*types.VideoInfo, error) {
+func GetMediaInfo(filePath, ffprobeExe string) (*types.VideoInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	cmd := exec.CommandContext(ctx, mediaInfoExe, "--output=JSON", filePath)
+	cmd := exec.CommandContext(ctx, ffprobeExe,
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_streams",
+		"-select_streams", "v:0",
+		filePath,
+	)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-
 	var result struct {
-		Media struct {
-			Track []map[string]interface{} `json:"track"`
-		} `json:"media"`
+		Streams []struct {
+			CodecName string `json:"codec_name"`
+			CodecTag  string `json:"codec_tag_string"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+		} `json:"streams"`
 	}
-
 	if err := json.Unmarshal(output, &result); err != nil {
 		return nil, err
 	}
 
-	for _, track := range result.Media.Track {
-		if trackType, ok := track["@type"].(string); ok && trackType == "Video" {
-			info := &types.VideoInfo{}
-
-			if format, ok := track["Format"].(string); ok {
-				info.Format = format
-			}
-			if codecID, ok := track["CodecID"].(string); ok {
-				info.CodecID = codecID
-			}
-			if width, ok := track["Width"].(string); ok {
-				fmt.Sscanf(width, "%d", &info.Width)
-			}
-			if height, ok := track["Height"].(string); ok {
-				fmt.Sscanf(height, "%d", &info.Height)
-			}
-
-			return info, nil
-		}
+	if len(result.Streams) == 0 {
+		return nil, fmt.Errorf("no video stream found")
 	}
 
-	return nil, fmt.Errorf("no video track found")
+	s := result.Streams[0]
+	return &types.VideoInfo{
+		Format:  s.CodecName,
+		CodecID: s.CodecTag,
+		Width:   s.Width,
+		Height:  s.Height,
+	}, nil
 }
 
 func IsHEVC(format, codecID string) bool {
