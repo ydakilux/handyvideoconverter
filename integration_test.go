@@ -16,7 +16,7 @@ import (
 	"video-converter/internal/fallback"
 	"video-converter/internal/gpu/benchmark"
 	"video-converter/internal/gpu/detect"
-	"video-converter/internal/types"
+
 )
 
 // mockGPUEncoder implements encoder.Encoder for testing FallbackManager.
@@ -412,63 +412,6 @@ func TestIntegrationFallbackManagerNonGPUError(t *testing.T) {
 	t.Log("FallbackManager correctly ignored non-GPU error")
 }
 
-// --- Test 7: Config SaveBenchmarkCache + GetBenchmarkCache via config package ---
-
-func TestIntegrationConfigBenchmarkCacheHelpers(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.json")
-
-	// Create a config with standard fields and write it
-	cfg := types.Config{
-		VideoEncoder:  "hevc_nvenc",
-		QualityPreset: "balanced",
-		MaxQueueSize:  3,
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		t.Fatalf("Failed to marshal config: %v", err)
-	}
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
-	}
-
-	// Save a benchmark cache entry via config helper
-	entry := types.BenchmarkCacheEntry{
-		FPS:         95.3,
-		Timestamp:   time.Now(),
-		EncoderName: "hevc_nvenc",
-	}
-	if err := cfgpkg.SaveBenchmarkCache(configPath, &cfg, "test_key", entry); err != nil {
-		t.Fatalf("SaveBenchmarkCache failed: %v", err)
-	}
-
-	// Get it back
-	got, ok := cfgpkg.GetBenchmarkCache(&cfg, "test_key")
-	if !ok {
-		t.Fatal("GetBenchmarkCache returned false for 'test_key'")
-	}
-	if got.FPS != 95.3 {
-		t.Errorf("FPS = %f, want 95.3", got.FPS)
-	}
-	if got.EncoderName != "hevc_nvenc" {
-		t.Errorf("EncoderName = %q, want %q", got.EncoderName, "hevc_nvenc")
-	}
-
-	// Verify config was persisted to disk
-	reloadedCfg, err := cfgpkg.LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig failed after SaveBenchmarkCache: %v", err)
-	}
-	reloadedEntry, ok := cfgpkg.GetBenchmarkCache(&reloadedCfg, "test_key")
-	if !ok {
-		t.Fatal("Reloaded config missing benchmark_cache entry 'test_key'")
-	}
-	if reloadedEntry.FPS != 95.3 {
-		t.Errorf("Reloaded FPS = %f, want 95.3", reloadedEntry.FPS)
-	}
-
-	t.Log("Config benchmark cache helpers round-trip succeeded")
-}
 
 // --- Test 8: detect.PriorityOrder and SelectBest with mixed availability ---
 

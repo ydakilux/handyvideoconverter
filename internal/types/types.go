@@ -1,8 +1,8 @@
 package types
 
 import (
+	"encoding/json"
 	"sync"
-	"time"
 )
 
 // Config holds application configuration
@@ -24,19 +24,13 @@ type Config struct {
 	FileExtensions     []string `json:"file_extensions"`
 	LogLevel           string   `json:"log_level"`
 	// GPU-related fields
-	BenchmarkCache   map[string]BenchmarkCacheEntry `json:"benchmark_cache,omitempty"`
+	BenchmarkCache   json.RawMessage `json:"benchmark_cache,omitempty"`
 	MaxEncodesPerGPU int                            `json:"max_encodes_per_gpu,omitempty"`
 	NonInteractive   bool                           `json:"non_interactive,omitempty"`
 	GPUPreset        string                         `json:"gpu_preset,omitempty"`
 	Rebenchmark      bool                           `json:"-"` // runtime-only, NOT persisted
 }
 
-// BenchmarkCacheEntry stores GPU benchmark results
-type BenchmarkCacheEntry struct {
-	FPS         float64   `json:"fps"`
-	Timestamp   time.Time `json:"timestamp"`
-	EncoderName string    `json:"encoder_name"`
-}
 
 // Record represents a cache entry
 type Record struct {

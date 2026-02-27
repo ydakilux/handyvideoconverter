@@ -44,6 +44,12 @@ var (
 	configFilePath      string // saved for benchmark cache operations
 )
 
+func exitWithPause(code int) {
+	fmt.Fprintln(os.Stderr, "\nPress Enter to exit...")
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
+	os.Exit(code)
+}
+
 func main() {
 	// Parse flags
 	var (
@@ -63,7 +69,7 @@ func main() {
 	exePath, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to get executable path: %v\n", err)
-		os.Exit(1)
+		exitWithPause(1)
 	}
 	execDir = filepath.Dir(exePath)
 
@@ -75,7 +81,7 @@ func main() {
 	cfg, err := cfgpkg.LoadConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
+		exitWithPause(1)
 	}
 	config = cfg
 
@@ -197,9 +203,37 @@ func main() {
 	// Ask about output drive
 	outputDriveOverride = askOutputDrive()
 
-	// Validate paths
+	// Prompt for folder path if none provided
 	if len(paths) == 0 {
-		log.Fatal("No input paths specified")
+		reader := bufio.NewReader(os.Stdin)
+		for attempts := 0; attempts < 3; attempts++ {
+			fmt.Print("No input folder specified. Enter folder path (or drag a folder here): ")
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to read input: %v\n", err)
+				continue
+			}
+			input = strings.Trim(strings.TrimSpace(input), "\"")
+			if input == "" {
+				fmt.Fprintln(os.Stderr, "Error: empty path provided")
+				continue
+			}
+			info, err := os.Stat(input)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: path does not exist: %v\n", err)
+				continue
+			}
+			if !info.IsDir() {
+				fmt.Fprintln(os.Stderr, "Error: path is not a directory")
+				continue
+			}
+			paths = []string{input}
+			break
+		}
+		if len(paths) == 0 {
+			log.Error("No valid input path provided after 3 attempts")
+			exitWithPause(1)
+		}
 	}
 
 	dbManager = database.NewDatabaseManager(log)

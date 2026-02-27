@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
 
 	"video-converter/internal/types"
 )
@@ -361,36 +361,6 @@ func TestApplyGPUDefaults(t *testing.T) {
 	}
 }
 
-func TestBenchmarkCacheRoundTrip(t *testing.T) {
-	cfg := types.Config{}
-	now := time.Now().Truncate(time.Second)
-	entry := types.BenchmarkCacheEntry{
-		FPS:         120.5,
-		Timestamp:   now,
-		EncoderName: "hevc_nvenc",
-	}
-
-	// Save to in-memory config (no file needed for this test)
-	if cfg.BenchmarkCache == nil {
-		cfg.BenchmarkCache = make(map[string]types.BenchmarkCacheEntry)
-	}
-	cfg.BenchmarkCache["gpu0_hevc_nvenc"] = entry
-
-	got, ok := GetBenchmarkCache(&cfg, "gpu0_hevc_nvenc")
-	if !ok {
-		t.Fatal("GetBenchmarkCache returned false for existing key")
-	}
-	if got.FPS != entry.FPS {
-		t.Errorf("FPS = %f, want %f", got.FPS, entry.FPS)
-	}
-	if !got.Timestamp.Equal(entry.Timestamp) {
-		t.Errorf("Timestamp = %v, want %v", got.Timestamp, entry.Timestamp)
-	}
-	if got.EncoderName != entry.EncoderName {
-		t.Errorf("EncoderName = %q, want %q", got.EncoderName, entry.EncoderName)
-	}
-}
-
 func TestRebenchmarkNotPersisted(t *testing.T) {
 	cfg := types.Config{
 		VideoEncoder: "hevc_nvenc",
@@ -406,66 +376,55 @@ func TestRebenchmarkNotPersisted(t *testing.T) {
 	}
 }
 
-func TestSaveBenchmarkCachePersistence(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "persist_config.json")
 
-	cfg := types.Config{
-		VideoEncoder:   "hevc_nvenc",
-		FileExtensions: []string{".MP4"},
-	}
-	// Write initial config
-	initData, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if err := os.WriteFile(cfgPath, initData, 0644); err != nil {
+// TestLoadConfigWithBenchmarkSaveCacheFormat verifies that LoadConfig succeeds
+// when the config file contains a benchmark_cache written by benchmark.SaveCache
+// (nested structure with "results" and "version" keys).
+func TestLoadConfigWithBenchmarkSaveCacheFormat(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+
+	// This is exactly the format benchmark.SaveCache writes
+	configJSON := `{
+	  "server_url": "http://localhost:5341/",
+	  "video_encoder": "hevc_nvenc",
+	  "quality_preset": "balanced",
+	  "file_extensions": [".MP4"],
+	  "log_level": "INFO",
+	  "benchmark_cache": {
+	    "results": {
+	      "d885394847b264d9ec86e5995da3cf72": {
+	        "encoder": "hevc_nvenc",
+	        "gpu_index": 0,
+	        "fps": 124.63,
+	        "speed_x": 4.15,
+	        "wall_clock_ms": 4814,
+	        "timestamp": "2026-02-27T19:06:19.9004477+01:00",
+	        "cache_key": "d885394847b264d9ec86e5995da3cf72"
+	      }
+	    },
+	    "version": "1"
+	  }
+	}`
+	if err := os.WriteFile(cfgPath, []byte(configJSON), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	now := time.Now().Truncate(time.Second)
-	entry := types.BenchmarkCacheEntry{
-		FPS:         95.3,
-		Timestamp:   now,
-		EncoderName: "hevc_nvenc",
-	}
-
-	if err := SaveBenchmarkCache(cfgPath, &cfg, "gpu0", entry); err != nil {
-		t.Fatalf("SaveBenchmarkCache: %v", err)
-	}
-
-	// Reload from disk
-	loaded, err := LoadConfig(cfgPath)
+	cfg, err := LoadConfig(cfgPath)
 	if err != nil {
-		t.Fatalf("LoadConfig after save: %v", err)
-	}
-	if loaded.BenchmarkCache == nil {
-		t.Fatal("BenchmarkCache is nil after reload")
-	}
-	got, ok := loaded.BenchmarkCache["gpu0"]
-	if !ok {
-		t.Fatal("gpu0 key not found in reloaded BenchmarkCache")
-	}
-	if got.FPS != entry.FPS {
-		t.Errorf("FPS = %f, want %f", got.FPS, entry.FPS)
-	}
-	if got.EncoderName != entry.EncoderName {
-		t.Errorf("EncoderName = %q, want %q", got.EncoderName, entry.EncoderName)
-	}
-}
-
-func TestGetBenchmarkCacheMissing(t *testing.T) {
-	// nil map
-	cfg := types.Config{}
-	_, ok := GetBenchmarkCache(&cfg, "nonexistent")
-	if ok {
-		t.Error("GetBenchmarkCache should return false for nil map")
+		t.Fatalf("LoadConfig should succeed with benchmark.SaveCache format, got: %v", err)
 	}
 
-	// initialized map but missing key
-	cfg.BenchmarkCache = make(map[string]types.BenchmarkCacheEntry)
-	_, ok = GetBenchmarkCache(&cfg, "nonexistent")
-	if ok {
-		t.Error("GetBenchmarkCache should return false for missing key")
+	// Verify other config fields survived
+	if cfg.VideoEncoder != "hevc_nvenc" {
+		t.Errorf("VideoEncoder = %q, want %q", cfg.VideoEncoder, "hevc_nvenc")
+	}
+	if cfg.QualityPreset != "balanced" {
+		t.Errorf("QualityPreset = %q, want %q", cfg.QualityPreset, "balanced")
+	}
+
+	// BenchmarkCache should be non-nil (raw JSON bytes preserved)
+	if cfg.BenchmarkCache == nil {
+		t.Error("BenchmarkCache should be non-nil when present in config")
 	}
 }
