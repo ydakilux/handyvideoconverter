@@ -74,7 +74,7 @@ func (hook *SeqHook) Fire(entry *logrus.Entry) error {
 
 	resp, err := hook.client.Do(req)
 	if err != nil {
-		return err
+		return nil // Silently ignore Seq connection failures
 	}
 	defer resp.Body.Close()
 

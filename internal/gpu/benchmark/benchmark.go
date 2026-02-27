@@ -52,6 +52,9 @@ func CacheKey(encoderName string, gpuIdentifier string, driverVersion string) st
 }
 
 func RunBenchmark(ffmpegPath string, encoder string, gpuIndex int, qualityArgs []string, logger *logrus.Logger) (*BenchmarkResult, error) {
+	if ffmpegPath == "" {
+		return nil, fmt.Errorf("ffmpeg not found \u2014 check ffmpeg_path in config or add ffmpeg to PATH")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 
