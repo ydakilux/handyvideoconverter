@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/sirupsen/logrus"
@@ -54,13 +55,34 @@ func (db *DatabaseManager) UpdateRecord(driveRoot, fileHash string, rec types.Re
 	db.dirty[driveRoot] = true
 }
 
+// fallbackDBPath computes a user-writable fallback path for the per-drive DB cache.
+// Returns empty string if the path cannot be determined.
+func fallbackDBPath(driveRoot string) string {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	vol := filepath.VolumeName(driveRoot)
+	letter := strings.TrimSuffix(vol, ":")
+	if letter == "" {
+		return ""
+	}
+	return filepath.Join(cacheDir, "video-converter", letter, "converted_files.json")
+}
+
 // loadDB reads the cache file for a drive. Must be called while holding db.mu.
 func (db *DatabaseManager) loadDB(driveRoot string) {
 	dbPath := filepath.Join(driveRoot, "converted_files.json")
 	data, err := os.ReadFile(dbPath)
 	if err != nil {
-		db.dbs[driveRoot] = make(map[string]types.Record)
-		return
+		// Try fallback location
+		if fbPath := fallbackDBPath(driveRoot); fbPath != "" {
+			data, err = os.ReadFile(fbPath)
+		}
+		if err != nil {
+			db.dbs[driveRoot] = make(map[string]types.Record)
+			return
+		}
 	}
 
 	var records map[string]types.Record
@@ -68,7 +90,6 @@ func (db *DatabaseManager) loadDB(driveRoot string) {
 		db.dbs[driveRoot] = make(map[string]types.Record)
 		return
 	}
-
 	db.dbs[driveRoot] = records
 }
 
@@ -91,6 +112,21 @@ func (db *DatabaseManager) SaveAll() {
 		}
 
 		if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+			// Try fallback location
+			if fbPath := fallbackDBPath(driveRoot); fbPath != "" {
+				fbDir := filepath.Dir(fbPath)
+				if mkErr := os.MkdirAll(fbDir, 0755); mkErr == nil {
+					fbTmp := fbPath + ".tmp"
+					if wErr := os.WriteFile(fbTmp, data, 0644); wErr == nil {
+						if rErr := os.Rename(fbTmp, fbPath); rErr == nil {
+							db.logger.Infof("DB saved to fallback location for %s", driveRoot)
+							db.dirty[driveRoot] = false
+							continue
+						}
+						os.Remove(fbTmp)
+					}
+				}
+			}
 			db.logger.Errorf("Failed to write DB temp file for %s: %v", driveRoot, err)
 			continue
 		}
@@ -99,7 +135,6 @@ func (db *DatabaseManager) SaveAll() {
 			db.logger.Errorf("Failed to rename DB file for %s: %v", driveRoot, err)
 			continue
 		}
-
 		db.dirty[driveRoot] = false
 	}
 }

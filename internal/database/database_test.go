@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -276,5 +277,87 @@ func TestLoadDBCorruptedJSON(t *testing.T) {
 	// Should gracefully return nil, not panic
 	if got != nil {
 		t.Errorf("expected nil for corrupted DB, got %+v", got)
+	}
+}
+
+func TestFallbackDBPath(t *testing.T) {
+	// Test that fallbackDBPath returns a valid path for a Windows-style drive root
+	result := fallbackDBPath("C:\\")
+	if result == "" {
+		t.Fatal("fallbackDBPath returned empty for C:\\")
+	}
+	if !strings.Contains(result, "video-converter") {
+		t.Errorf("expected path to contain 'video-converter', got %q", result)
+	}
+	if !strings.Contains(result, string(filepath.Separator)+"C"+string(filepath.Separator)) {
+		t.Errorf("expected path to contain drive letter 'C', got %q", result)
+	}
+	if !strings.HasSuffix(result, "converted_files.json") {
+		t.Errorf("expected path to end with converted_files.json, got %q", result)
+	}
+
+	// Test that empty volume name returns empty
+	result = fallbackDBPath("/some/unix/path")
+	if result != "" {
+		t.Errorf("expected empty for unix path, got %q", result)
+	}
+}
+
+func TestSaveAllFallbackOnPermissionError(t *testing.T) {
+	// Use a non-existent path as driveRoot to trigger write failure.
+	// On Windows, os.Chmod(dir, 0555) doesn't make directories read-only,
+	// so we use a path that simply doesn't exist to force the fallback.
+	driveRoot := "Z:\\nonexistent_drive_test_dir\\"
+
+	logger := newTestLogger()
+	dm := NewDatabaseManager(logger)
+
+	// Update a record for the non-existent driveRoot
+	rec := types.Record{
+		OriginalSize:  5000,
+		ConvertedSize: 2500,
+		Output:        "test_fallback.mp4",
+	}
+	dm.UpdateRecord(driveRoot, "fallback_hash", rec)
+
+	// SaveAll should use the fallback path since Z:\ doesn't exist
+	dm.SaveAll()
+
+	// Determine where the fallback file should be
+	fbPath := fallbackDBPath(driveRoot)
+	if fbPath == "" {
+		t.Fatal("fallbackDBPath returned empty; cannot verify fallback")
+	}
+
+	// Clean up fallback files after the test
+	fbDir := filepath.Dir(fbPath)
+	defer os.RemoveAll(fbDir)
+
+	// Verify the fallback file was created
+	if _, err := os.Stat(fbPath); os.IsNotExist(err) {
+		t.Fatal("fallback DB file was not created")
+	}
+
+	// Verify dirty flag was cleared
+	dm.mu.Lock()
+	if dm.dirty[driveRoot] {
+		t.Error("dirty flag should be false after successful fallback save")
+	}
+	dm.mu.Unlock()
+
+	// Verify a new DatabaseManager can load the record from the fallback path
+	dm2 := NewDatabaseManager(logger)
+	got := dm2.GetRecord(driveRoot, "fallback_hash")
+	if got == nil {
+		t.Fatal("GetRecord returned nil; fallback loadDB did not find the record")
+	}
+	if got.OriginalSize != 5000 {
+		t.Errorf("OriginalSize = %d, want 5000", got.OriginalSize)
+	}
+	if got.ConvertedSize != 2500 {
+		t.Errorf("ConvertedSize = %d, want 2500", got.ConvertedSize)
+	}
+	if got.Output != "test_fallback.mp4" {
+		t.Errorf("Output = %q, want %q", got.Output, "test_fallback.mp4")
 	}
 }
