@@ -194,6 +194,172 @@ func TestRunBenchmarkIntegration(t *testing.T) {
 	}
 }
 
+func TestParallelCacheKeyDeterministic(t *testing.T) {
+	k1 := ParallelCacheKey("hevc_nvenc")
+	k2 := ParallelCacheKey("hevc_nvenc")
+	if k1 != k2 {
+		t.Errorf("ParallelCacheKey not deterministic: %q != %q", k1, k2)
+	}
+	if k1 == "" {
+		t.Error("ParallelCacheKey returned empty string")
+	}
+}
+
+func TestParallelCacheKeyDiffersFromSingle(t *testing.T) {
+	single := CacheKey("hevc_nvenc", "", "")
+	parallel := ParallelCacheKey("hevc_nvenc")
+	if single == parallel {
+		t.Error("ParallelCacheKey should differ from single-stream CacheKey")
+	}
+}
+
+func TestIsParallelCacheValidMissing(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results:         make(map[string]BenchmarkResult),
+		ParallelResults: make(map[string]ParallelBenchmarkResult),
+		Version:         "1",
+	}
+	if IsParallelCacheValid(cache, "nonexistent") {
+		t.Error("IsParallelCacheValid should return false for missing key")
+	}
+}
+
+func TestIsParallelCacheValidZeroFPS(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results: make(map[string]BenchmarkResult),
+		ParallelResults: map[string]ParallelBenchmarkResult{
+			"key1": {
+				Encoder:         "hevc_nvenc",
+				BestParallelism: 2,
+				BestFPS:         0, // zero FPS — should be invalid
+				Timestamp:       time.Now(),
+				CacheKey:        "key1",
+			},
+		},
+		Version: "1",
+	}
+	if IsParallelCacheValid(cache, "key1") {
+		t.Error("IsParallelCacheValid should return false when BestFPS == 0")
+	}
+}
+
+func TestIsParallelCacheValidExpired(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results: make(map[string]BenchmarkResult),
+		ParallelResults: map[string]ParallelBenchmarkResult{
+			"key1": {
+				Encoder:         "hevc_nvenc",
+				BestParallelism: 2,
+				BestFPS:         120.0,
+				Timestamp:       time.Now().Add(-31 * 24 * time.Hour), // 31 days ago
+				CacheKey:        "key1",
+			},
+		},
+		Version: "1",
+	}
+	if IsParallelCacheValid(cache, "key1") {
+		t.Error("IsParallelCacheValid should return false for expired entry")
+	}
+}
+
+func TestIsParallelCacheValidFresh(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results: make(map[string]BenchmarkResult),
+		ParallelResults: map[string]ParallelBenchmarkResult{
+			"key1": {
+				Encoder:         "hevc_nvenc",
+				BestParallelism: 2,
+				BestFPS:         120.0,
+				Timestamp:       time.Now(),
+				CacheKey:        "key1",
+			},
+		},
+		Version: "1",
+	}
+	if !IsParallelCacheValid(cache, "key1") {
+		t.Error("IsParallelCacheValid should return true for fresh valid entry")
+	}
+}
+
+func TestParallelResultsRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+
+	initial := map[string]interface{}{"video_encoder": "hevc_nvenc"}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	os.WriteFile(configPath, data, 0644)
+
+	key := ParallelCacheKey("hevc_nvenc")
+	cache := &BenchmarkCache{
+		Results: make(map[string]BenchmarkResult),
+		ParallelResults: map[string]ParallelBenchmarkResult{
+			key: {
+				Encoder:         "hevc_nvenc",
+				BestParallelism: 3,
+				BestFPS:         310.5,
+				Runs: map[int]BenchmarkResult{
+					1: {Encoder: "hevc_nvenc", FPS: 120.0},
+					2: {Encoder: "hevc_nvenc", FPS: 230.0},
+					3: {Encoder: "hevc_nvenc", FPS: 310.5},
+					4: {Encoder: "hevc_nvenc", FPS: 295.0},
+				},
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				CacheKey:  key,
+			},
+		},
+		Version: "1",
+	}
+
+	if err := SaveCache(configPath, cache); err != nil {
+		t.Fatalf("SaveCache failed: %v", err)
+	}
+
+	loaded, err := LoadCache(configPath)
+	if err != nil {
+		t.Fatalf("LoadCache failed: %v", err)
+	}
+
+	r, ok := loaded.ParallelResults[key]
+	if !ok {
+		t.Fatal("parallel result not found after round-trip")
+	}
+	if r.BestParallelism != 3 {
+		t.Errorf("BestParallelism: got %d, want 3", r.BestParallelism)
+	}
+	if r.BestFPS != 310.5 {
+		t.Errorf("BestFPS: got %f, want 310.5", r.BestFPS)
+	}
+	if len(r.Runs) != 4 {
+		t.Errorf("Runs count: got %d, want 4", len(r.Runs))
+	}
+}
+
+func TestRunParallelSweepIntegration(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not in PATH, skipping integration test")
+	}
+
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+
+	// Use libx265 ultrafast so the sweep completes quickly in CI
+	result, err := RunParallelSweep(ffmpegPath, "libx265", 2, []string{"-crf", "28", "-preset", "ultrafast"}, logger)
+	if err != nil {
+		t.Fatalf("RunParallelSweep failed: %v", err)
+	}
+
+	if result.BestParallelism < 1 || result.BestParallelism > 2 {
+		t.Errorf("BestParallelism out of range: got %d", result.BestParallelism)
+	}
+	if result.BestFPS <= 0 {
+		t.Errorf("BestFPS should be positive: got %f", result.BestFPS)
+	}
+	if len(result.Runs) == 0 {
+		t.Error("Runs should not be empty")
+	}
+}
+
 func TestRunFullBenchmarkSkipsCPU(t *testing.T) {
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {

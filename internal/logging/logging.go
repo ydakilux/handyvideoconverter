@@ -83,27 +83,37 @@ func (hook *SeqHook) Fire(entry *logrus.Entry) error {
 
 // SetupLogging creates and configures a logrus.Logger with file output,
 // SimpleFormatter, optional Seq hook, and the specified log level.
+//
+// consoleWriter, if non-nil, receives log lines in addition to the log file.
+// Pass os.Stdout for plain output or a tui.UI.Writer() for TUI-integrated output.
+// When nil, output goes to os.Stdout.
+//
 // It returns the logger and a cleanup function that closes the log file.
-	func SetupLogging(serverURL, apiKey, logLevel, execDir string) (*logrus.Logger, func()) {
+func SetupLogging(serverURL, apiKey, logLevel, execDir string, consoleWriter io.Writer) (*logrus.Logger, func()) {
 	logger := logrus.New()
 	cleanup := func() {} // no-op default
+
+	if consoleWriter == nil {
+		consoleWriter = os.Stdout
+	}
+
 	// Create log file with timestamp
 	logFileName := fmt.Sprintf("video-converter_%s.log", time.Now().Format("2006-01-02_15-04-05"))
 	logFilePath := filepath.Join(execDir, logFileName)
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
+		logger.SetOutput(consoleWriter)
 	} else {
-		// Write to both console and file
-		mw := io.MultiWriter(os.Stdout, logFile)
+		mw := io.MultiWriter(consoleWriter, logFile)
 		logger.SetOutput(mw)
-		fmt.Printf("Logging to: %s\n", logFilePath)
+		fmt.Fprintf(consoleWriter, "Logging to: %s\n", logFilePath)
 		cleanup = func() {
 			logger.SetOutput(io.Discard)
 			logFile.Close()
 		}
 	}
-	// Custom formatter that only outputs the message (for console)
+	// Custom formatter that only outputs the message (no timestamp/level prefix)
 	logger.SetFormatter(&SimpleFormatter{})
 	level, err := logrus.ParseLevel(logLevel)
 	if err != nil {

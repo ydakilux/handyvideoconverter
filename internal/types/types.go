@@ -25,12 +25,13 @@ type Config struct {
 	LogLevel           string   `json:"log_level"`
 	// GPU-related fields
 	BenchmarkCache   json.RawMessage `json:"benchmark_cache,omitempty"`
-	MaxEncodesPerGPU int                            `json:"max_encodes_per_gpu,omitempty"`
-	NonInteractive   bool                           `json:"non_interactive,omitempty"`
-	GPUPreset        string                         `json:"gpu_preset,omitempty"`
-	Rebenchmark      bool                           `json:"-"` // runtime-only, NOT persisted
+	MaxEncodesPerGPU int             `json:"max_encodes_per_gpu,omitempty"`
+	NonInteractive   bool            `json:"non_interactive,omitempty"`
+	GPUPreset        string          `json:"gpu_preset,omitempty"`
+	Rebenchmark      bool            `json:"-"` // runtime-only, NOT persisted
+	// Parallelism
+	MaxParallelJobs int `json:"max_parallel_jobs,omitempty"`
 }
-
 
 // Record represents a cache entry
 type Record struct {

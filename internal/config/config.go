@@ -39,6 +39,7 @@ func CreateDefaultConfig(path string) (types.Config, error) {
 		APIKey:             "",
 		UsePartialHash:     true,
 		MaxQueueSize:       3,
+		MaxParallelJobs:    1,
 		MediaInfoPath:      "MediaInfo_CLI_24.04_Windows_x64\\MediaInfo.exe",
 		FFmpegPath:         "ffmpeg\\bin\\ffmpeg.exe",
 		FFprobePath:        "",
@@ -152,11 +153,13 @@ func ResolveExecutable(configPath, exeName, execDir string) string {
 	return exe
 }
 
-
 // ApplyGPUDefaults sets default values for GPU-related config fields.
 // Only sets defaults when fields are at their zero value.
 func ApplyGPUDefaults(cfg *types.Config) {
 	if cfg.MaxEncodesPerGPU == 0 {
 		cfg.MaxEncodesPerGPU = 2
+	}
+	if cfg.MaxParallelJobs == 0 {
+		cfg.MaxParallelJobs = 1
 	}
 }

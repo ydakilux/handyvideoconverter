@@ -52,7 +52,9 @@ func BuildArgs(inputPath, outputPath, quality, outputExt, encoder string) []stri
 	return args
 }
 
-func Run(ffmpegExe string, args []string, filePath string, totalDuration float64, logger *logrus.Logger) (int, string) {
+// Run executes FFmpeg with the given args. onProgress is called with the
+// percentage (0-100) each time it changes; pass nil to disable callbacks.
+func Run(ffmpegExe string, args []string, filePath string, totalDuration float64, logger *logrus.Logger, onProgress func(pct int)) (int, string) {
 	cmd := exec.Command(ffmpegExe, args...)
 
 	stdout, err := cmd.StdoutPipe()
@@ -80,6 +82,7 @@ func Run(ffmpegExe string, args []string, filePath string, totalDuration float64
 	}()
 
 	lastPct := -1
+	var lastSent time.Time
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -107,9 +110,15 @@ func Run(ffmpegExe string, args []string, filePath string, totalDuration float64
 
 				if totalDuration > 0 && outTime > 0 {
 					pct := int(100 * outTime / totalDuration)
-					if pct > lastPct && (pct%10 == 0 || pct == 100) {
-						logger.Infof("Progress: %d%%", pct)
+					if pct > lastPct {
 						lastPct = pct
+						if onProgress != nil {
+							now := time.Now()
+							if pct >= 100 || lastSent.IsZero() || now.Sub(lastSent) >= 2500*time.Millisecond {
+								lastSent = now
+								onProgress(pct)
+							}
+						}
 					}
 				}
 			}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -12,8 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
@@ -27,6 +28,8 @@ import (
 	"video-converter/internal/gpu/benchmark"
 	"video-converter/internal/gpu/detect"
 	"video-converter/internal/logging"
+	"video-converter/internal/pipeline"
+	"video-converter/internal/tui"
 	"video-converter/internal/types"
 )
 
@@ -42,6 +45,7 @@ var (
 	encoderRegistry     *encoder.Registry
 	fbManager           *fallback.FallbackManager
 	configFilePath      string // saved for benchmark cache operations
+	ui                  *tui.UI
 )
 
 func exitWithPause(code int) {
@@ -55,15 +59,20 @@ func main() {
 	var (
 		configFile     = flag.String("config", "configVideoConversion.json", "Path to config file")
 		dryRun         = flag.Bool("dry-run", false, "Dry run mode")
-		bypass         bool
-		forceHevc      bool
+		bypassFlag     = flag.Bool("bypass", false, "Re-convert files already in the database (bypass DB check)")
+		forceHevcFlag  = flag.Bool("force-hevc", false, "Re-compress files that are already H.265/HEVC")
+		sameDrive      = flag.Bool("same-drive", false, "Write output to the same drive as the source (skip drive prompt)")
 		encoderFlag    = flag.String("encoder", "auto", "Video encoder (auto, hevc_nvenc, hevc_amf, hevc_qsv, libx265)")
+		parallelJobs   = flag.Int("jobs", 0, "Number of parallel conversion jobs (0 = use benchmark recommendation)")
 		nonInteractive = flag.Bool("non-interactive", false, "Disable interactive prompts for GPU fallback")
 		rebenchmark    = flag.Bool("rebenchmark", false, "Force GPU benchmark even if cache exists")
 	)
 	flag.Parse()
 
 	paths := flag.Args()
+
+	bypass := *bypassFlag
+	forceHevc := *forceHevcFlag
 
 	// Get executable directory
 	exePath, err := os.Executable()
@@ -85,11 +94,6 @@ func main() {
 	}
 	config = cfg
 
-	// Setup logging
-	var logCleanup func()
-	log, logCleanup = logging.SetupLogging(config.ServerURL, config.APIKey, config.LogLevel, execDir)
-	defer logCleanup()
-
 	// Apply CLI flag overrides to config
 	if *nonInteractive {
 		config.NonInteractive = true
@@ -110,6 +114,11 @@ func main() {
 
 	// Save config path for benchmark cache
 	configFilePath = configPath
+
+	// Setup logging to stdout before TUI starts (prompts happen on plain terminal)
+	var logCleanup func()
+	log, logCleanup = logging.SetupLogging(config.ServerURL, config.APIKey, config.LogLevel, execDir, nil)
+	defer logCleanup()
 
 	// Resolve FFmpeg path for GPU detection
 	ffmpegExe := cfgpkg.ResolveExecutable(config.FFmpegPath, "ffmpeg.exe", execDir)
@@ -154,54 +163,89 @@ func main() {
 
 	// Benchmark (for GPU encoders only)
 	if config.VideoEncoder != "libx265" {
-		cacheKey := benchmark.CacheKey(config.VideoEncoder, "", "")
+		qualityArgs := selectedEncoder.QualityArgs(config.QualityPreset, 1920)
+		singleKey := benchmark.CacheKey(config.VideoEncoder, "", "")
+		parallelKey := benchmark.ParallelCacheKey(config.VideoEncoder)
 
-		var haveCachedBenchmark bool
-		if !config.Rebenchmark {
-			cache, err := benchmark.LoadCache(configFilePath)
-			if err == nil && benchmark.IsCacheValid(cache, cacheKey) {
-				cachedResult := cache.Results[cacheKey]
-				log.Infof("Using cached benchmark: %.1f FPS for %s", cachedResult.FPS, config.VideoEncoder)
-				haveCachedBenchmark = true
+		cache, _ := benchmark.LoadCache(configFilePath)
+		if cache == nil {
+			cache = &benchmark.BenchmarkCache{
+				Results:         make(map[string]benchmark.BenchmarkResult),
+				ParallelResults: make(map[string]benchmark.ParallelBenchmarkResult),
+				Version:         "1",
 			}
 		}
 
-		if !haveCachedBenchmark {
-			log.Info("Running GPU benchmark...")
-			qualityArgs := selectedEncoder.QualityArgs(config.QualityPreset, 1920)
+		// Run single-stream benchmark if missing/stale/forced
+		if config.Rebenchmark || !benchmark.IsCacheValid(cache, singleKey) {
+			log.Info("Running GPU benchmark (single stream)...")
 			result, err := benchmark.RunBenchmark(ffmpegExe, config.VideoEncoder, 0, qualityArgs, log)
 			if err != nil {
 				log.Warnf("Benchmark failed: %v — proceeding without speed data", err)
 			} else {
 				log.Infof("Benchmark: %s @ %.1f FPS (%.2fx realtime)", config.VideoEncoder, result.FPS, result.SpeedX)
-
-				// Save to cache
-				cache, _ := benchmark.LoadCache(configFilePath)
-				if cache == nil {
-					cache = &benchmark.BenchmarkCache{Results: make(map[string]benchmark.BenchmarkResult), Version: "1"}
-				}
-				result.CacheKey = cacheKey
-				cache.Results[cacheKey] = *result
-				if err := benchmark.SaveCache(configFilePath, cache); err != nil {
-					log.Warnf("Failed to save benchmark cache: %v", err)
-				}
+				result.CacheKey = singleKey
+				cache.Results[singleKey] = *result
 			}
+		} else {
+			cached := cache.Results[singleKey]
+			log.Infof("Using cached benchmark: %.1f FPS for %s", cached.FPS, config.VideoEncoder)
+		}
+
+		// Run parallel sweep if missing/stale/forced
+		if config.Rebenchmark || !benchmark.IsParallelCacheValid(cache, parallelKey) {
+			log.Info("Running parallel performance sweep (this takes ~2 minutes)...")
+			sweepResult, err := benchmark.RunParallelSweep(ffmpegExe, config.VideoEncoder, 4, qualityArgs, log)
+			if err != nil {
+				log.Warnf("Parallel sweep failed: %v — keeping current parallel setting", err)
+			} else {
+				cache.ParallelResults[parallelKey] = *sweepResult
+				config.MaxParallelJobs = sweepResult.BestParallelism
+				log.Infof("Auto-configured: %d parallel job(s) gives best throughput (%.1f FPS)", sweepResult.BestParallelism, sweepResult.BestFPS)
+			}
+		} else {
+			cached := cache.ParallelResults[parallelKey]
+			log.Infof("Using cached parallel sweep: best = %d job(s) @ %.1f FPS", cached.BestParallelism, cached.BestFPS)
+			if config.MaxParallelJobs <= 1 {
+				// Only apply cached recommendation if user hasn't manually set a higher value
+				config.MaxParallelJobs = cached.BestParallelism
+			}
+		}
+
+		// Persist updated cache
+		if err := benchmark.SaveCache(configFilePath, cache); err != nil {
+			log.Warnf("Failed to save benchmark cache: %v", err)
 		}
 	}
 
 	// Create FallbackManager for GPU error recovery
 	fbManager = fallback.NewFallbackManager(!config.NonInteractive, os.Stdin, log)
 
-	// Interactive prompts if not specified
-	if !contains(os.Args, "--bypass") {
+	// Interactive prompts — skipped when the corresponding flag is provided
+	if !*bypassFlag {
 		bypass = askYesNo("Force re-conversion (bypass DB check)? [y/N]: ")
 	}
-	if !contains(os.Args, "--force-hevc") {
+	if !*forceHevcFlag {
 		forceHevc = askYesNo("Test re-compression even if file is already HEVC? [y/N]: ")
 	}
 
-	// Ask about output drive
-	outputDriveOverride = askOutputDrive()
+	// Allow user to override the auto-detected parallel job count
+	if *parallelJobs > 0 {
+		if *parallelJobs > 8 {
+			fmt.Println("Warning: values above 8 are unlikely to help and may thrash the GPU. Capping at 8.")
+			*parallelJobs = 8
+		}
+		config.MaxParallelJobs = *parallelJobs
+	} else {
+		config.MaxParallelJobs = askParallelJobs(config.MaxParallelJobs)
+	}
+
+	// Ask about output drive (skipped when --same-drive is set)
+	if *sameDrive {
+		outputDriveOverride = "" // explicit: use source drive
+	} else {
+		outputDriveOverride = askOutputDrive()
+	}
 
 	// Prompt for folder path if none provided
 	if len(paths) == 0 {
@@ -236,6 +280,10 @@ func main() {
 		}
 	}
 
+	// All interactive prompts are done — start the TUI and re-route logging through it.
+	ui = tui.New()
+	log, logCleanup = logging.SetupLogging(config.ServerURL, config.APIKey, config.LogLevel, execDir, ui.Writer())
+
 	dbManager = database.NewDatabaseManager(log)
 
 	// Initialize stats
@@ -251,35 +299,60 @@ func main() {
 	log.Infof("Found %d files to process", len(files))
 
 	// Setup pipeline
-	jobQueue := make(chan types.Job, config.MaxQueueSize)
-	var wg sync.WaitGroup
+	numWorkers := config.MaxParallelJobs
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+	bufSize := numWorkers * 2
+	if config.MaxQueueSize > bufSize {
+		bufSize = config.MaxQueueSize
+	}
 
-	// Start consumer
-	wg.Add(1)
+	ctx := context.Background()
+	pipe := pipeline.NewPipeline(ctx, numWorkers, bufSize)
+
+	if numWorkers > 1 {
+		log.Infof("Parallel mode: %d concurrent jobs", numWorkers)
+	}
+
+	pipe.Start(func(ctx context.Context, job types.Job) pipeline.ConversionResult {
+		processConversion(job, *dryRun)
+		dbManager.SaveAll()
+		return pipeline.ConversionResult{Job: job}
+	})
+
+	// Start global session timer (all prompts are done at this point)
+	ui.StartTimer()
+
+	// Produce jobs then signal done (closes jobs channel + results when workers finish)
 	go func() {
-		defer wg.Done()
-		consumer(jobQueue, *dryRun)
+		producer(files, fileToBaseDir, pipe, bypass, forceHevc)
 	}()
 
-	// Start producer
-	producer(files, fileToBaseDir, jobQueue, bypass, forceHevc)
-
-	// Wait for consumer to finish
-	wg.Wait()
+	// Drain results — blocks until pipeline is fully drained and closed
+	for range pipe.Results() {
+	}
 
 	// Save all databases
 	dbManager.SaveAll()
 
-	// Print stats
-	printStats()
+	// Stop TUI (restores normal screen) then print summary to normal terminal
+	elapsed := ui.Elapsed()
+	ui.Wait()
+	ui.PrintSummary(buildStatsSummary(elapsed))
 
 	// Auto-open HSORTED folders
 	openHSortedFolders()
 
-	log.Info("All tasks completed")
-	log.Info("")
-	log.Info("Press Enter to exit...")
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
+	fmt.Println("All tasks completed")
+	fmt.Println()
+	if config.NonInteractive {
+		// Machine-readable line for scripting (e.g. batch benchmark)
+		fmt.Printf("ELAPSED=%s\n", fmtElapsed(elapsed))
+	} else {
+		fmt.Println("Press Enter to exit...")
+		bufio.NewReader(os.Stdin).ReadBytes('\n')
+	}
 }
 
 func askYesNo(prompt string) bool {
@@ -291,6 +364,31 @@ func askYesNo(prompt string) bool {
 	}
 	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	return answer == "y" || answer == "yes"
+}
+
+// askParallelJobs asks how many jobs to run concurrently.
+// The recommended value is pre-filled from the parallel benchmark sweep.
+// Returns the chosen value (1 = sequential).
+func askParallelJobs(recommended int) int {
+	fmt.Printf("\nParallel jobs [recommended: %d, Enter to accept]: ", recommended)
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return recommended
+	}
+	input := strings.TrimSpace(scanner.Text())
+	if input == "" {
+		return recommended
+	}
+	n, err := strconv.Atoi(input)
+	if err != nil || n < 1 {
+		fmt.Println("Invalid input, using recommended value.")
+		return recommended
+	}
+	if n > 8 {
+		fmt.Println("Warning: values above 8 are unlikely to help and may thrash the GPU. Capping at 8.")
+		n = 8
+	}
+	return n
 }
 
 // getAvailableDrives returns a list of available drive letters on Windows
@@ -434,8 +532,8 @@ func resolveFFprobeExe() string {
 	return ffprobeExe
 }
 
-func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- types.Job, bypass, forceHevc bool) {
-	defer close(jobQueue)
+func producer(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pipeline, bypass, forceHevc bool) {
+	defer pipe.Wait()
 
 	// Disable progress bar to avoid conflicts with log output
 	// bar := progressbar.Default(int64(len(files)), "Processing")
@@ -564,32 +662,29 @@ func producer(files []string, fileToBaseDir map[string]string, jobQueue chan<- t
 				FolderNumber:    folderNumber,
 				TotalFolders:    totalFolders,
 			}
-			jobQueue <- job
+			pipe.Submit(job) //nolint:errcheck // context cancellation is benign here
 		}
-	}
-}
-
-func consumer(jobQueue <-chan types.Job, dryRun bool) {
-	for job := range jobQueue {
-		processConversion(job, dryRun)
-		dbManager.SaveAll()
 	}
 }
 
 func processConversion(job types.Job, dryRun bool) {
 	fileName := filepath.Base(job.FilePath)
 
-	log.Info("")
-	log.Infof("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Infof("Converting [%d/%d]: %s (%dp)", job.FileNumber, job.TotalFiles, fileName, job.Height)
 	if strings.ToLower(filepath.Ext(job.FilePath)) == ".mkv" {
-		log.Infof("Format: MKV (preserving all audio/subtitle streams & metadata)")
+		log.Infof("  Format: MKV (preserving all audio/subtitle streams & metadata)")
 	}
-	log.Infof("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	if dryRun {
 		log.Infof("[DRY RUN] Would convert: %s (%dp)", fileName, job.Height)
 		return
+	}
+
+	// Register a TUI progress bar for this job.
+	jobID := ui.StartJob(fileName, job.FileNumber, job.TotalFiles, job.Height, job.DurationSeconds)
+	// onProgress callback: forward FFmpeg progress to the TUI bar.
+	onProgress := func(pct int) {
+		ui.UpdateProgress(jobID, pct)
 	}
 
 	// Determine output paths - preserve directory structure from base directory
@@ -655,7 +750,7 @@ func processConversion(job types.Job, dryRun bool) {
 	args := buildConversionArgs(job.FilePath, tempPath, outputExt, config.VideoEncoder, qualityArgs, deviceArgs)
 	// Run FFmpeg
 	ffmpegExe := cfgpkg.ResolveExecutable(config.FFmpegPath, "ffmpeg.exe", execDir)
-	rc, stderrOut := ffmpeg.Run(ffmpegExe, args, job.FilePath, job.DurationSeconds, log)
+	rc, stderrOut := ffmpeg.Run(ffmpegExe, args, job.FilePath, job.DurationSeconds, log, onProgress)
 	// Handle GPU failure with fallback
 	if rc != 0 && config.VideoEncoder != "libx265" {
 		shouldFallback, fbErr := fbManager.HandleGPUError(stderrOut, selectedEncoder, &jobStringer{job})
@@ -667,7 +762,7 @@ func processConversion(job types.Job, dryRun bool) {
 			cpuEncoder, _ := encoderRegistry.Get("libx265")
 			cpuQualityArgs := cpuEncoder.QualityArgs(config.QualityPreset, job.Width)
 			cpuArgs := buildConversionArgs(job.FilePath, tempPath, outputExt, "libx265", cpuQualityArgs, nil)
-			rc, stderrOut = ffmpeg.Run(ffmpegExe, cpuArgs, job.FilePath, job.DurationSeconds, log)
+			rc, stderrOut = ffmpeg.Run(ffmpegExe, cpuArgs, job.FilePath, job.DurationSeconds, log, onProgress)
 		}
 	}
 	if rc != 0 {
@@ -675,6 +770,7 @@ func processConversion(job types.Job, dryRun bool) {
 		if stderrOut != "" {
 			log.Errorf("FFmpeg stderr: %s", stderrOut)
 		}
+		ui.CompleteError(jobID, fmt.Sprintf("✗ FAILED  [%d/%d] %s", job.FileNumber, job.TotalFiles, fileName))
 		dbManager.UpdateRecord(job.DriveRoot, job.FileHash, types.Record{
 			OriginalSize: job.OriginalSize,
 			Error:        fmt.Sprintf("rc_%d", rc),
@@ -690,32 +786,23 @@ func processConversion(job types.Job, dryRun bool) {
 	tempInfo, err := os.Stat(tempPath)
 	if err != nil {
 		log.Errorf("Failed to stat temp file: %v", err)
+		ui.CompleteError(jobID, fmt.Sprintf("✗ ERROR   [%d/%d] %s", job.FileNumber, job.TotalFiles, fileName))
 		os.Remove(tempPath)
 		return
 	}
 
 	newSize := tempInfo.Size()
 
-	// Print conversion result
 	origMB := float64(job.OriginalSize) / (1024 * 1024)
 	newMB := float64(newSize) / (1024 * 1024)
-
-	log.Info("┌────────────────────────────────────────────────────────────────┐")
-	log.Infof("│ File: %-56s │", truncateString(fileName, 56))
-	log.Info("├────────────────────────────────────────────────────────────────┤")
-	log.Infof("│ Original Size:  %8.2f MB                                    │", origMB)
-	log.Infof("│ New Size:       %8.2f MB                                    │", newMB)
 
 	if newSize < job.OriginalSize {
 		// KEPT - File improved
 		reduction := float64(job.OriginalSize-newSize) / float64(job.OriginalSize) * 100
 		savedMB := origMB - newMB
-
-		log.Infof("│ Saved:          %8.2f MB (%.1f%% reduction)                │", savedMB, reduction)
-		log.Info("├────────────────────────────────────────────────────────────────┤")
-		log.Info("│ Result: ✓ KEPT - File will be saved                           │")
-		log.Info("└────────────────────────────────────────────────────────────────┘")
-		log.Info("")
+		summary := fmt.Sprintf("✓ KEPT    [%d/%d] %-32s  %.2f MB → %.2f MB  (-%.2f MB, %.1f%%)",
+			job.FileNumber, job.TotalFiles, truncateString(fileName, 32), origMB, newMB, savedMB, reduction)
+		ui.CompleteKept(jobID, summary)
 
 		// Create final directory now that we know the file will be kept
 		os.MkdirAll(finalDir, 0755)
@@ -757,12 +844,9 @@ func processConversion(job types.Job, dryRun bool) {
 		// DISCARDED - File not improved
 		increase := float64(newSize-job.OriginalSize) / float64(job.OriginalSize) * 100
 		increasedMB := newMB - origMB
-
-		log.Infof("│ Increased:      %8.2f MB (+%.1f%%)                         │", increasedMB, increase)
-		log.Info("├────────────────────────────────────────────────────────────────┤")
-		log.Info("│ Result: ✗ DISCARDED - File not improved, keeping original     │")
-		log.Info("└────────────────────────────────────────────────────────────────┘")
-		log.Info("")
+		summary := fmt.Sprintf("✗ DISCARD [%d/%d] %-32s  %.2f MB → %.2f MB  (+%.2f MB, +%.1f%%)",
+			job.FileNumber, job.TotalFiles, truncateString(fileName, 32), origMB, newMB, increasedMB, increase)
+		ui.CompleteDiscard(jobID, summary)
 
 		os.Remove(tempPath)
 
@@ -893,21 +977,24 @@ func sanitizeFolderName(name string) string {
 	return filepath.Join(parts...)
 }
 
-func printStats() {
+func buildStatsSummary(elapsed time.Duration) []string {
 	stats.Mu.Lock()
 	defer stats.Mu.Unlock()
 
-	log.Info("")
-	log.Info("╔════════════════════════════════════════════════════════════════╗")
-	log.Info("║           VIDEO CONVERSION SUMMARY                             ║")
-	log.Info("╠════════════════════════════════════════════════════════════════╣")
-	log.Infof("║ Files Analyzed:     %-43d║", stats.FilesAnalyzed)
-	log.Infof("║ Files Converted:    %-43d║", stats.FilesProcessed)
-	log.Infof("║   → Improved:       %-43d║", stats.FilesImproved)
-	log.Infof("║   → Discarded:      %-43d║", stats.FilesDiscarded)
-	log.Infof("║ Files Skipped:      %-43d║", stats.FilesSkipped)
-	log.Infof("║ Files Errored:      %-43d║", stats.FilesErrored)
-	log.Info("╠════════════════════════════════════════════════════════════════╣")
+	var lines []string
+	lines = append(lines,
+		"",
+		"╔════════════════════════════════════════════════════════════════╗",
+		"║           VIDEO CONVERSION SUMMARY                             ║",
+		"╠════════════════════════════════════════════════════════════════╣",
+		fmt.Sprintf("║ Files Analyzed:     %-43d║", stats.FilesAnalyzed),
+		fmt.Sprintf("║ Files Converted:    %-43d║", stats.FilesProcessed),
+		fmt.Sprintf("║   → Improved:       %-43d║", stats.FilesImproved),
+		fmt.Sprintf("║   → Discarded:      %-43d║", stats.FilesDiscarded),
+		fmt.Sprintf("║ Files Skipped:      %-43d║", stats.FilesSkipped),
+		fmt.Sprintf("║ Files Errored:      %-43d║", stats.FilesErrored),
+		"╠════════════════════════════════════════════════════════════════╣",
+	)
 
 	if stats.OriginalBytes > 0 {
 		saved := stats.OriginalBytes - stats.FinalBytes
@@ -917,13 +1004,36 @@ func printStats() {
 		finalStr := formatBytes(stats.FinalBytes)
 		savedStr := formatBytes(saved)
 
-		log.Infof("║ Original Size:      %-43s║", origStr)
-		log.Infof("║ Final Size:         %-43s║", finalStr)
-		log.Infof("║ Space Saved:        %-33s (%.1f%%)║", savedStr, pct)
+		lines = append(lines,
+			fmt.Sprintf("║ Original Size:      %-43s║", origStr),
+			fmt.Sprintf("║ Final Size:         %-43s║", finalStr),
+			fmt.Sprintf("║ Space Saved:        %-33s (%.1f%%)║", savedStr, pct),
+		)
 	}
 
-	log.Info("╚════════════════════════════════════════════════════════════════╝")
-	log.Info("")
+	if elapsed > 0 {
+		lines = append(lines,
+			"╠════════════════════════════════════════════════════════════════╣",
+			fmt.Sprintf("║ Total Time:         %-43s║", fmtElapsed(elapsed)),
+		)
+	}
+
+	lines = append(lines,
+		"╚════════════════════════════════════════════════════════════════╝",
+		"",
+	)
+	return lines
+}
+
+func fmtElapsed(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	s := int(d.Seconds()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
+	}
+	return fmt.Sprintf("%dm %02ds", m, s)
 }
 
 func formatBytes(bytes int64) string {
@@ -965,7 +1075,6 @@ func openHSortedFolders() {
 		}
 	}
 }
-
 
 // jobStringer wraps a types.Job to implement fmt.Stringer for FallbackManager.
 type jobStringer struct {

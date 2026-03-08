@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -30,6 +31,7 @@ var cpuEncoders = map[string]bool{
 	"libx264": true,
 }
 
+// BenchmarkResult holds the result of a single-stream benchmark run.
 type BenchmarkResult struct {
 	Encoder     string    `json:"encoder"`
 	GPUIndex    int       `json:"gpu_index"`
@@ -40,9 +42,21 @@ type BenchmarkResult struct {
 	CacheKey    string    `json:"cache_key"`
 }
 
+// ParallelBenchmarkResult holds results for all parallelism levels tested.
+type ParallelBenchmarkResult struct {
+	Encoder         string                  `json:"encoder"`
+	BestParallelism int                     `json:"best_parallelism"`
+	BestFPS         float64                 `json:"best_fps"`
+	Runs            map[int]BenchmarkResult `json:"runs"` // key = number of parallel streams
+	Timestamp       time.Time               `json:"timestamp"`
+	CacheKey        string                  `json:"cache_key"`
+}
+
+// BenchmarkCache stores both single-stream and parallel results.
 type BenchmarkCache struct {
-	Results map[string]BenchmarkResult `json:"results"`
-	Version string                      `json:"version"`
+	Results         map[string]BenchmarkResult         `json:"results"`
+	ParallelResults map[string]ParallelBenchmarkResult `json:"parallel_results,omitempty"`
+	Version         string                             `json:"version"`
 }
 
 func CacheKey(encoderName string, gpuIdentifier string, driverVersion string) string {
@@ -51,9 +65,16 @@ func CacheKey(encoderName string, gpuIdentifier string, driverVersion string) st
 	return fmt.Sprintf("%x", hash[:16])
 }
 
+// ParallelCacheKey returns the cache key used for a parallel-sweep result.
+func ParallelCacheKey(encoderName string) string {
+	raw := fmt.Sprintf("parallel|%s", encoderName)
+	hash := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%x", hash[:16])
+}
+
 func RunBenchmark(ffmpegPath string, encoder string, gpuIndex int, qualityArgs []string, logger *logrus.Logger) (*BenchmarkResult, error) {
 	if ffmpegPath == "" {
-		return nil, fmt.Errorf("ffmpeg not found \u2014 check ffmpeg_path in config or add ffmpeg to PATH")
+		return nil, fmt.Errorf("ffmpeg not found — check ffmpeg_path in config or add ffmpeg to PATH")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
@@ -96,6 +117,128 @@ func RunBenchmark(ffmpegPath string, encoder string, gpuIndex int, qualityArgs [
 		WallClockMs: wallMs,
 		Timestamp:   time.Now(),
 	}, nil
+}
+
+// runParallelStreams launches n simultaneous benchmark encodes and returns
+// combined FPS = (n * totalFrames) / max(wall clock across all streams).
+func runParallelStreams(ffmpegPath, encoder string, n int, qualityArgs []string, logger *logrus.Logger) (*BenchmarkResult, error) {
+	type result struct {
+		wallMs int64
+		err    error
+	}
+
+	results := make([]result, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+
+	// Use the longest wall-clock as the denominator — that's the real elapsed
+	// time the user would wait if running n jobs simultaneously.
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), runTimeout*time.Duration(n))
+			defer cancel()
+
+			args := []string{
+				"-hide_banner", "-y", "-nostats",
+				"-f", "lavfi",
+				"-i", fmt.Sprintf("testsrc=duration=%d:size=%dx%d:rate=%d", benchmarkDuration, benchmarkWidth, benchmarkHeight, benchmarkRate),
+				"-c:v", encoder,
+			}
+			args = append(args, qualityArgs...)
+			args = append(args, "-f", "null", "-")
+
+			cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+			_, err := cmd.CombinedOutput()
+			results[i] = result{wallMs: time.Since(start).Milliseconds(), err: err}
+		}()
+	}
+	wg.Wait()
+
+	wallMs := time.Since(start).Milliseconds()
+	if wallMs <= 0 {
+		wallMs = 1
+	}
+
+	for i, r := range results {
+		if r.err != nil {
+			return nil, fmt.Errorf("parallel stream %d/%d failed: %w", i+1, n, r.err)
+		}
+	}
+
+	combinedFrames := float64(n * totalFrames)
+	fps := combinedFrames / (float64(wallMs) / 1000.0)
+	speedX := fps / float64(benchmarkRate)
+
+	return &BenchmarkResult{
+		Encoder:     encoder,
+		FPS:         fps,
+		SpeedX:      speedX,
+		WallClockMs: wallMs,
+		Timestamp:   time.Now(),
+	}, nil
+}
+
+// RunParallelSweep tests parallelism levels 1..maxParallel for the given encoder,
+// picks the best level, logs a comparison table, and returns the full result.
+func RunParallelSweep(ffmpegPath, encoder string, maxParallel int, qualityArgs []string, logger *logrus.Logger) (*ParallelBenchmarkResult, error) {
+	if ffmpegPath == "" {
+		return nil, fmt.Errorf("ffmpeg not found — check ffmpeg_path in config or add ffmpeg to PATH")
+	}
+	if maxParallel < 1 {
+		maxParallel = 1
+	}
+
+	result := &ParallelBenchmarkResult{
+		Encoder:   encoder,
+		Runs:      make(map[int]BenchmarkResult),
+		Timestamp: time.Now(),
+		CacheKey:  ParallelCacheKey(encoder),
+	}
+
+	logger.Infof("┌─────────────────────────────────────────────────────┐")
+	logger.Infof("│         PARALLEL PERFORMANCE SWEEP                  │")
+	logger.Infof("│  Testing %s with 1..%d parallel jobs          │", encoder, maxParallel)
+	logger.Infof("├──────────────┬──────────────┬───────────────────────┤")
+	logger.Infof("│  Parallel    │  Total FPS   │  vs 1 stream          │")
+	logger.Infof("├──────────────┼──────────────┼───────────────────────┤")
+
+	var baseFPS float64
+
+	for n := 1; n <= maxParallel; n++ {
+		logger.Infof("  Running %d parallel stream(s)...", n)
+
+		r, err := runParallelStreams(ffmpegPath, encoder, n, qualityArgs, logger)
+		if err != nil {
+			logger.Warnf("  Parallel=%d failed: %v — stopping sweep", n, err)
+			break
+		}
+
+		result.Runs[n] = *r
+
+		if n == 1 {
+			baseFPS = r.FPS
+		}
+
+		scaling := 0.0
+		if baseFPS > 0 {
+			scaling = (r.FPS / baseFPS) * 100
+		}
+
+		logger.Infof("│  %-12d│  %8.1f fps│  %+.1f%%                 │", n, r.FPS, scaling-100)
+
+		if r.FPS > result.BestFPS {
+			result.BestFPS = r.FPS
+			result.BestParallelism = n
+		}
+	}
+
+	logger.Infof("└──────────────┴──────────────┴───────────────────────┘")
+	logger.Infof("► Best setting: %d parallel job(s) @ %.1f FPS", result.BestParallelism, result.BestFPS)
+
+	return result, nil
 }
 
 func RunFullBenchmark(ffmpegPath string, encoders []detect.GPUInfo, qualityArgs map[string][]string, logger *logrus.Logger) ([]BenchmarkResult, error) {
@@ -162,8 +305,9 @@ func RunFullBenchmark(ffmpegPath string, encoders []detect.GPUInfo, qualityArgs 
 
 func LoadCache(configPath string) (*BenchmarkCache, error) {
 	emptyCache := &BenchmarkCache{
-		Results: make(map[string]BenchmarkResult),
-		Version: "1",
+		Results:         make(map[string]BenchmarkResult),
+		ParallelResults: make(map[string]ParallelBenchmarkResult),
+		Version:         "1",
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -190,6 +334,9 @@ func LoadCache(configPath string) (*BenchmarkCache, error) {
 	}
 	if cache.Results == nil {
 		cache.Results = make(map[string]BenchmarkResult)
+	}
+	if cache.ParallelResults == nil {
+		cache.ParallelResults = make(map[string]ParallelBenchmarkResult)
 	}
 
 	return &cache, nil
@@ -236,6 +383,18 @@ func SaveCache(configPath string, cache *BenchmarkCache) error {
 func IsCacheValid(cache *BenchmarkCache, key string) bool {
 	result, ok := cache.Results[key]
 	if !ok {
+		return false
+	}
+	return time.Since(result.Timestamp) < cacheMaxAge
+}
+
+// IsParallelCacheValid returns true if a valid parallel sweep result exists for the given key.
+func IsParallelCacheValid(cache *BenchmarkCache, key string) bool {
+	result, ok := cache.ParallelResults[key]
+	if !ok {
+		return false
+	}
+	if result.BestFPS <= 0 {
 		return false
 	}
 	return time.Since(result.Timestamp) < cacheMaxAge

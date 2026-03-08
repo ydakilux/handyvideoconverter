@@ -17,14 +17,14 @@ import (
 func setupTestLogger(t *testing.T) (*logrus.Logger, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	logger, cleanup := SetupLogging("", "", "info", tmpDir)
+	logger, cleanup := SetupLogging("", "", "info", tmpDir, nil)
 	t.Cleanup(cleanup)
 	return logger, tmpDir
 }
 func setupTestLoggerWithParams(t *testing.T, serverURL, apiKey, logLevel string) (*logrus.Logger, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	logger, cleanup := SetupLogging(serverURL, apiKey, logLevel, tmpDir)
+	logger, cleanup := SetupLogging(serverURL, apiKey, logLevel, tmpDir, nil)
 	t.Cleanup(cleanup)
 	return logger, tmpDir
 }

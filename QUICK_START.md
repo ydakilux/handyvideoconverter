@@ -1,102 +1,146 @@
 # Quick Start - Video Converter
 
-## ✅ What Just Got Fixed
-
-### 1. Clean Console Output
-- ❌ Before: `level=info msg="┌─────..."`
-- ✅ Now: `┌─────────────────...` (clean, no prefixes)
-
-### 2. Quality Settings
-- ❌ Before: Files getting LARGER (284 MB → 403 MB)
-- ✅ Now: Configurable presets for space savings
-
-## 🚀 For Your Use Case (Already Compressed Videos)
-
-**Your config file will be auto-created on first run. To fix the size increase issue:**
-
-1. Run the program once to generate config:
-   ```bash
-   video-converter.exe V:\________Done\tempo\
-   ```
-
-2. Edit `configVideoConversion.json` and change:
-   ```json
-   "quality_preset": "space_saver"
-   ```
-
-3. Run again - now files should get SMALLER!
-
-## 📊 Expected Output Now
-
-```
-Force re-conversion (bypass DB check)? [y/N]: n
-Test re-compression even if file is already HEVC? [y/N]: n
-Discovering files...
-Found 25 files to process
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Converting: video.mp4 (1080p)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Progress: 10%
-Progress: 20%
-...
-Progress: 100%
-┌────────────────────────────────────────────────────────────────┐
-│ File: video.mp4                                                │
-├────────────────────────────────────────────────────────────────┤
-│ Original Size:    284.66 MB                                    │
-│ New Size:         198.45 MB                                    │
-│ Saved:             86.21 MB (30.3% reduction)                  │
-├────────────────────────────────────────────────────────────────┤
-│ Result: ✓ KEPT - File will be saved                           │
-└────────────────────────────────────────────────────────────────┘
-```
-
-## 🎯 Quality Presets Quick Reference
-
-| Preset | Use When | CQ (1080p) | Expected Savings |
-|--------|----------|------------|------------------|
-| `high_quality` | Archival, max quality | 21 | May increase size |
-| `balanced` | General use (default) | 27 | 20-40% reduction |
-| `space_saver` | Already compressed | 30 | 40-60% reduction |
-
-## 📖 Full Documentation
-
-- **QUALITY_SETTINGS.md** - Complete quality guide
-- **CHANGELOG.md** - All changes and improvements
-- **AGENTS.md** - Developer guide
-
-## 💡 Tips
-
-1. **Test first**: Use `--dry-run` to preview without converting
-2. **Start small**: Test on a few files before batch processing
-3. **Check results**: First few conversions will tell you if settings are good
-4. **Adjust**: Change preset if not getting desired results
-
-## 🔧 Common Commands
+## 🚀 Basic Usage
 
 ```bash
-# Preview what would happen
-video-converter.exe --dry-run V:\Videos\
+# Convert all videos in a folder (interactive prompts guide you through the rest)
+video-converter.exe D:\Videos\
 
-# Force re-conversion of already processed files
-video-converter.exe V:\Videos\  # Answer "y" to bypass prompt
-
-# Use different config
-video-converter.exe --config myconfig.json V:\Videos\
-
-# Override encoder
-video-converter.exe --encoder libx265 V:\Videos\
+# Multiple folders
+video-converter.exe D:\Movies\ E:\Shows\
 ```
 
-## ✨ New Features Summary
+## 🔧 Command-Line Flags
 
-1. ✅ Clean console output (no `level=info msg=`)
-2. ✅ Detailed per-file results (MB sizes, percentages)
-3. ✅ Beautiful summary statistics
-4. ✅ Configurable quality presets
-5. ✅ Custom quality per resolution
-6. ✅ Progress every 10% (less noise)
-7. ✅ Visual separators between files
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | off | Preview what would be converted without writing any files |
+| `--bypass` | off | Re-convert files already recorded in the database |
+| `--force-hevc` | off | Re-compress files that are already H.265/HEVC |
+| `--same-drive` | off | Write output to the same drive as the source (skips drive prompt) |
+| `--jobs <n>` | `0` (auto) | Number of parallel conversion jobs; `0` uses the benchmark recommendation |
+| `--encoder <name>` | `auto` | Force a specific encoder (see below) |
+| `--config <path>` | `configVideoConversion.json` | Path to config file |
+| `--non-interactive` | off | Skip GPU fallback prompts (useful for scripted runs) |
+| `--rebenchmark` | off | Force GPU benchmark even if a cached result exists |
 
-Enjoy your clean, professional video converter! 🎬
+### Encoder options for `--encoder`
+
+| Value | Description |
+|-------|-------------|
+| `auto` | Auto-detect best GPU encoder (default) |
+| `hevc_nvenc` | NVIDIA GPU (H.265) |
+| `hevc_amf` | AMD GPU (H.265) |
+| `hevc_qsv` | Intel Quick Sync (H.265) |
+| `libx265` | CPU software encoder (slowest, most compatible) |
+
+## 💬 Interactive Prompts
+
+On each run you will be asked:
+
+1. **Force re-conversion?** — Re-process files already in the database (`y/N`)
+2. **Test already-HEVC files?** — Re-compress files that are already H.265 (`y/N`)
+3. **Parallel jobs** — How many files to encode simultaneously (pre-filled from benchmark)
+4. **Output drive** — Write results to a different drive than the source (`y/N`)
+5. **Input folder** — Only asked if no path was given on the command line
+
+## 📊 Quality Presets
+
+Set `quality_preset` in `configVideoConversion.json`:
+
+| Preset | Best for | Expected savings |
+|--------|----------|-----------------|
+| `high_quality` | Archival / max quality | Minimal or none |
+| `balanced` | General use (default) | 20–40% |
+| `space_saver` | Already-compressed sources | 40–60% |
+
+## 🎬 Common Examples
+
+```bash
+# Run with exactly 2 parallel jobs (skips the interactive jobs prompt)
+video-converter.exe --jobs 2 D:\Videos\
+
+# Re-convert everything, even already-processed or already-HEVC files
+video-converter.exe --bypass --force-hevc D:\Videos\
+
+# Write output to the same drive as the source, no prompts at all
+video-converter.exe --same-drive --bypass --jobs 4 D:\Videos\
+
+# Dry run — see what would happen without converting anything
+video-converter.exe --dry-run D:\Videos\
+
+# Force CPU encoder (no GPU required)
+video-converter.exe --encoder libx265 D:\Videos\
+
+# Use a custom config file
+video-converter.exe --config D:\my-settings.json D:\Videos\
+
+# Re-run benchmark before starting (after driver update, etc.)
+video-converter.exe --rebenchmark D:\Videos\
+
+# Fully non-interactive (no GPU fallback prompts; still asks for folder/drive)
+video-converter.exe --non-interactive D:\Videos\
+```
+
+## 📁 Output Location
+
+Converted files are written to:
+```
+<drive>\HSORTED\<source-folder>\<filename>.mp4
+```
+
+Files that are **larger** after conversion are discarded automatically — the original is left untouched.
+
+## 📈 Benchmark Tool
+
+Find the optimal `--jobs` value for your hardware by running the converter multiple times and comparing elapsed times.
+
+```bash
+# Build the benchmark tool (one-time)
+go build -o benchmark.exe ./cmd/benchmark
+
+# Run with default jobs list (1,2,4,8) against a sample folder
+benchmark.exe --input D:\Videos\
+
+# Test specific jobs values
+benchmark.exe --input D:\Videos\ --jobs 1,2,4
+
+# Custom binary path and output file
+benchmark.exe --input D:\Videos\ --jobs 2,4 --bin D:\tools\video-converter.exe --output my_results.csv
+```
+
+### Benchmark flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--input <dir>` | *(required)* | Input directory to convert |
+| `--jobs <list>` | `1,2,4,8` | Comma-separated list of `--jobs` values to test |
+| `--output <file>` | `benchmark_results.csv` | CSV output path |
+| `--bin <path>` | auto-detect | Path to `video-converter` binary |
+| `--extra-flags <str>` | *(none)* | Additional flags forwarded to each converter run |
+
+The tool prints a summary table and writes a CSV with columns `jobs,elapsed,wall_ms,error`:
+
+```
+▶  jobs=1 ... ELAPSED=4m 12s  wall=4m 15s
+▶  jobs=2 ... ELAPSED=2m 34s  wall=2m 37s
+▶  jobs=4 ... ELAPSED=1m 58s  wall=2m 01s
+▶  jobs=8 ... ELAPSED=2m 03s  wall=2m 06s
+
+┌────────┬──────────────┬──────────────┐
+│  jobs  │   elapsed    │  wall time   │
+├────────┼──────────────┼──────────────┤
+│ 1      │ 4m 12s       │ 4m 15s       │
+│ 2      │ 2m 34s       │ 2m 37s       │
+│ 4      │ 1m 58s       │ 2m 01s       │
+│ 8      │ 2m 03s       │ 2m 06s       │
+└────────┴──────────────┴──────────────┘
+```
+
+> **Note:** The benchmark passes `--bypass --force-hevc --same-drive --non-interactive` automatically so each run processes the same files under comparable conditions. The GPU benchmark cache is reused across runs — use `--extra-flags --rebenchmark` only if you want to force a fresh GPU sweep.
+
+## 📖 Further Reading
+
+- **QUALITY_SETTINGS.md** — Complete quality and CRF/CQ guide
+- **CHANGELOG.md** — Full change history
+- **AGENTS.md** — Developer / contributor guide
