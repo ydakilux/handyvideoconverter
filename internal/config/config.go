@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"video-converter/internal/types"
@@ -75,63 +74,9 @@ func ValidateEncoder(encoder string) error {
 	return fmt.Errorf("invalid video encoder %q; valid options: %s", encoder, strings.Join(ValidEncoders, ", "))
 }
 
-func DetermineQuality(width int, cfg types.Config) string {
-	if cfg.CustomQualitySD > 0 && width <= 1024 {
-		return strconv.Itoa(cfg.CustomQualitySD)
-	}
-	if cfg.CustomQuality720p > 0 && width <= 1280 {
-		return strconv.Itoa(cfg.CustomQuality720p)
-	}
-	if cfg.CustomQuality1080p > 0 && width <= 1920 {
-		return strconv.Itoa(cfg.CustomQuality1080p)
-	}
-	if cfg.CustomQuality4K > 0 && width > 1920 {
-		return strconv.Itoa(cfg.CustomQuality4K)
-	}
-
-	switch strings.ToLower(cfg.QualityPreset) {
-	case "high_quality":
-		if width <= 1024 {
-			return "19"
-		} else if width <= 1280 {
-			return "20"
-		} else if width <= 1920 {
-			return "21"
-		}
-		return "23"
-
-	case "balanced":
-		if width <= 1024 {
-			return "23"
-		} else if width <= 1280 {
-			return "25"
-		} else if width <= 1920 {
-			return "27"
-		}
-		return "30"
-
-	case "space_saver":
-		if width <= 1024 {
-			return "26"
-		} else if width <= 1280 {
-			return "28"
-		} else if width <= 1920 {
-			return "30"
-		}
-		return "33"
-
-	default:
-		if width <= 1024 {
-			return "23"
-		} else if width <= 1280 {
-			return "25"
-		} else if width <= 1920 {
-			return "27"
-		}
-		return "30"
-	}
-}
-
+// ResolveExecutable resolves the path to an executable. It first checks the
+// config-supplied path (absolute or relative to execDir); if not found or empty,
+// it falls back to exec.LookPath.
 func ResolveExecutable(configPath, exeName, execDir string) string {
 	if configPath == "" {
 		exe, _ := exec.LookPath(exeName)

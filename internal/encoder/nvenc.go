@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+var nvencCQTable = qualityTable{
+	{20, 22, 24, 26}, // high_quality
+	{24, 26, 28, 30}, // balanced
+	{28, 30, 32, 35}, // space_saver
+}
+
 // NvencEncoder implements Encoder for the hevc_nvenc (NVIDIA NVENC) codec.
 type NvencEncoder struct{}
 
@@ -21,9 +27,8 @@ func (e *NvencEncoder) Name() string {
 }
 
 func (e *NvencEncoder) QualityArgs(preset string, width int) []string {
-	cq := nvencCQ(preset, width)
-	nvPreset := nvencPreset(preset)
-	return []string{"-cq", cq, "-preset", nvPreset}
+	cq := strconv.Itoa(qualityValue(preset, width, nvencCQTable))
+	return []string{"-cq", cq, "-preset", nvencPreset(preset)}
 }
 
 func (e *NvencEncoder) DeviceArgs(gpuIndex int) []string {
@@ -46,50 +51,24 @@ func (e *NvencEncoder) IsAvailable(ffmpegPath string) bool {
 }
 
 func (e *NvencEncoder) ParseError(stderr string) (bool, string) {
-	if strings.Contains(stderr, "No capable devices found") {
+	lower := strings.ToLower(stderr)
+	if strings.Contains(lower, "no capable devices found") {
 		return true, "NVENC: no capable GPU devices"
 	}
-	if strings.Contains(stderr, "OpenEncodeSessionEx failed") {
+	if strings.Contains(lower, "openencodesessionex failed") {
 		return true, "NVENC: session limit or memory error"
 	}
-	if strings.Contains(stderr, "InitializeEncoder failed") {
+	if strings.Contains(lower, "initializeencoder failed") {
 		return true, "NVENC: encoder initialization failed"
 	}
-	return false, ""
-}
-
-func nvencCQ(preset string, width int) string {
-	switch strings.ToLower(preset) {
-	case "high_quality":
-		if width <= 1024 {
-			return "20"
-		} else if width <= 1280 {
-			return "22"
-		} else if width <= 1920 {
-			return "24"
-		}
-		return "26"
-
-	case "space_saver":
-		if width <= 1024 {
-			return "28"
-		} else if width <= 1280 {
-			return "30"
-		} else if width <= 1920 {
-			return "32"
-		}
-		return "35"
-
-	default: // "balanced" and any unknown preset
-		if width <= 1024 {
-			return "24"
-		} else if width <= 1280 {
-			return "26"
-		} else if width <= 1920 {
-			return "28"
-		}
-		return "30"
+	// Driver too old: FFmpeg built against a newer NVENC SDK than the installed driver.
+	// e.g. "Driver does not support the required nvenc API version. Required: 13.0 Found: 12.2"
+	if strings.Contains(lower, "does not support the required nvenc api version") ||
+		strings.Contains(lower, "minimum required nvidia driver") ||
+		strings.Contains(lower, "error while opening encoder") {
+		return true, "NVENC: driver too old — update NVIDIA driver to use GPU encoding"
 	}
+	return false, ""
 }
 
 func nvencPreset(preset string) string {

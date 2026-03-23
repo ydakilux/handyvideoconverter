@@ -32,6 +32,7 @@ type Pipeline struct {
 	consumers int
 	ctx       context.Context
 	cancel    context.CancelFunc
+	ctrl      *Controller
 }
 
 // NewPipeline creates a new Pipeline with the given number of consumers
@@ -51,8 +52,13 @@ func NewPipeline(ctx context.Context, consumers int, bufferSize int) *Pipeline {
 		consumers: consumers,
 		ctx:       derivedCtx,
 		cancel:    cancel,
+		ctrl:      NewController(),
 	}
 }
+
+// Controller returns the pipeline's [Controller], which can be used to
+// pause, resume, or stop processing from external goroutines (e.g. the TUI).
+func (p *Pipeline) Controller() *Controller { return p.ctrl }
 
 // Start launches consumer goroutines that read jobs from the jobs channel
 // and call the provided handler for each job. Each consumer runs until
@@ -63,7 +69,11 @@ func (p *Pipeline) Start(handler func(ctx context.Context, job types.Job) Conver
 		go func() {
 			defer p.wg.Done()
 			for job := range p.jobs {
-				// Check if context is cancelled before processing
+				// Block here while paused; return if StopNow was called.
+				if !p.ctrl.CheckPause() {
+					return
+				}
+				// StopAfterCurrent: skip queued jobs but let in-flight finish.
 				if p.ctx.Err() != nil {
 					return
 				}
@@ -76,8 +86,12 @@ func (p *Pipeline) Start(handler func(ctx context.Context, job types.Job) Conver
 
 // Submit sends a job to the pipeline for processing. It blocks if the
 // jobs channel buffer is full. Returns ctx.Err() if the context is
-// cancelled before the job can be submitted.
+// cancelled before the job can be submitted. Returns ErrStopped if the
+// controller has been told to stop after current jobs.
 func (p *Pipeline) Submit(job types.Job) error {
+	if p.ctrl.Mode() != StopModeNone {
+		return p.ctx.Err()
+	}
 	select {
 	case p.jobs <- job:
 		return nil
@@ -103,6 +117,8 @@ func (p *Pipeline) Wait() {
 
 // Stop cancels the pipeline context, signaling all consumers to stop
 // processing. It does NOT close channels directly — Wait handles that.
+// For a graceful "finish current jobs" stop, call ctrl.StopAfterCurrent()
+// followed by Wait(); for immediate cancellation, call ctrl.StopNow() then Stop().
 func (p *Pipeline) Stop() {
 	p.cancel()
 }

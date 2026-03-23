@@ -242,9 +242,10 @@ func TestSetupLoggingParsesLogLevel(t *testing.T) {
 func TestSetupLoggingCreatesLogFile(t *testing.T) {
 	_, tmpDir := setupTestLogger(t)
 
-	entries, err := os.ReadDir(tmpDir)
+	logsDir := filepath.Join(tmpDir, "logs")
+	entries, err := os.ReadDir(logsDir)
 	if err != nil {
-		t.Fatalf("failed to read temp dir: %v", err)
+		t.Fatalf("failed to read logs dir: %v", err)
 	}
 
 	found := false
@@ -256,7 +257,7 @@ func TestSetupLoggingCreatesLogFile(t *testing.T) {
 	}
 
 	if !found {
-		t.Error("expected log file with pattern video-converter_*.log to be created")
+		t.Error("expected log file with pattern video-converter_*.log to be created in logs/")
 	}
 }
 
@@ -313,15 +314,120 @@ func TestNewSeqHookTrimsTrailingSlash(t *testing.T) {
 	}
 }
 
+func TestSeqHookCircuitBreakerDisablesAfterMaxFailures(t *testing.T) {
+	// Point the hook at a URL that will always fail.
+	hook := NewSeqHook("http://127.0.0.1:1", "") // port 1 is unreachable
+
+	entry := &logrus.Entry{
+		Message: "fail",
+		Level:   logrus.InfoLevel,
+		Time:    time.Now(),
+		Data:    logrus.Fields{},
+		Logger:  logrus.New(),
+	}
+
+	for i := 0; i < seqMaxFailures; i++ {
+		if err := hook.Fire(entry); err != nil {
+			t.Fatalf("Fire should not return error, got: %v", err)
+		}
+		if i < seqMaxFailures-1 && hook.disabled {
+			t.Fatalf("hook disabled too early at iteration %d", i)
+		}
+	}
+
+	if !hook.disabled {
+		t.Error("expected hook to be disabled after seqMaxFailures consecutive failures")
+	}
+	if hook.failures < seqMaxFailures {
+		t.Errorf("expected failures >= %d, got %d", seqMaxFailures, hook.failures)
+	}
+}
+
+func TestSeqHookCircuitBreakerSkipsWhenDisabled(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	hook := NewSeqHook(server.URL, "")
+	hook.disabled = true // pre-disable
+
+	entry := &logrus.Entry{
+		Message: "should not reach server",
+		Level:   logrus.InfoLevel,
+		Time:    time.Now(),
+		Data:    logrus.Fields{},
+		Logger:  logrus.New(),
+	}
+
+	if err := hook.Fire(entry); err != nil {
+		t.Fatalf("Fire returned error: %v", err)
+	}
+
+	if callCount != 0 {
+		t.Errorf("expected 0 HTTP calls when disabled, got %d", callCount)
+	}
+}
+
+func TestSeqHookCircuitBreakerResetsOnSuccess(t *testing.T) {
+	// First: accumulate some failures using an unreachable address.
+	hook := NewSeqHook("http://127.0.0.1:1", "")
+
+	failEntry := &logrus.Entry{
+		Message: "fail",
+		Level:   logrus.InfoLevel,
+		Time:    time.Now(),
+		Data:    logrus.Fields{},
+		Logger:  logrus.New(),
+	}
+
+	// Fire fewer than seqMaxFailures so the hook stays enabled.
+	for i := 0; i < seqMaxFailures-1; i++ {
+		_ = hook.Fire(failEntry)
+	}
+	if hook.failures != seqMaxFailures-1 {
+		t.Fatalf("expected %d failures, got %d", seqMaxFailures-1, hook.failures)
+	}
+
+	// Now swap the serverURL to a working server and fire a success.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	hook.serverURL = server.URL
+
+	successEntry := &logrus.Entry{
+		Message: "success",
+		Level:   logrus.InfoLevel,
+		Time:    time.Now(),
+		Data:    logrus.Fields{},
+		Logger:  logrus.New(),
+	}
+
+	if err := hook.Fire(successEntry); err != nil {
+		t.Fatalf("Fire returned error: %v", err)
+	}
+
+	if hook.failures != 0 {
+		t.Errorf("expected failures reset to 0 after success, got %d", hook.failures)
+	}
+	if hook.disabled {
+		t.Error("hook should not be disabled after a successful send")
+	}
+}
+
 func TestSetupLoggingWritesToLogFile(t *testing.T) {
 	logger, tmpDir := setupTestLoggerWithParams(t, "", "", "info")
 
 	logger.Info("test log entry")
 
-	entries, _ := os.ReadDir(tmpDir)
+	logsDir := filepath.Join(tmpDir, "logs")
+	entries, _ := os.ReadDir(logsDir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "video-converter_") && strings.HasSuffix(e.Name(), ".log") {
-			content, err := os.ReadFile(filepath.Join(tmpDir, e.Name()))
+			content, err := os.ReadFile(filepath.Join(logsDir, e.Name()))
 			if err != nil {
 				t.Fatalf("failed to read log file: %v", err)
 			}

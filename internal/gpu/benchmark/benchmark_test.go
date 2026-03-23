@@ -75,6 +75,31 @@ func TestLoadSaveCacheRoundTrip(t *testing.T) {
 		t.Fatalf("SaveCache failed: %v", err)
 	}
 
+	// Cache must be written to benchmark_cache.json, NOT injected into config.json
+	cachePath := CachePath(configPath)
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("benchmark_cache.json not created: %v", err)
+	}
+
+	// Config file must be untouched
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("Failed to read config: %v", err)
+	}
+	var fullConfig map[string]interface{}
+	if err := json.Unmarshal(raw, &fullConfig); err != nil {
+		t.Fatalf("Failed to unmarshal config: %v", err)
+	}
+	if fullConfig["video_encoder"] != "hevc_nvenc" {
+		t.Errorf("Existing config field 'video_encoder' not preserved: got %v", fullConfig["video_encoder"])
+	}
+	if fullConfig["quality_preset"] != "balanced" {
+		t.Errorf("Existing config field 'quality_preset' not preserved: got %v", fullConfig["quality_preset"])
+	}
+	if _, hasBench := fullConfig["benchmark_cache"]; hasBench {
+		t.Error("Config file must NOT contain benchmark_cache key after migration to separate file")
+	}
+
 	loaded, err := LoadCache(configPath)
 	if err != nil {
 		t.Fatalf("LoadCache failed: %v", err)
@@ -111,21 +136,6 @@ func TestLoadSaveCacheRoundTrip(t *testing.T) {
 	}
 	if result.CacheKey != "test-key-1" {
 		t.Errorf("CacheKey mismatch: got %q", result.CacheKey)
-	}
-
-	raw, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("Failed to read config: %v", err)
-	}
-	var fullConfig map[string]interface{}
-	if err := json.Unmarshal(raw, &fullConfig); err != nil {
-		t.Fatalf("Failed to unmarshal config: %v", err)
-	}
-	if fullConfig["video_encoder"] != "hevc_nvenc" {
-		t.Errorf("Existing config field 'video_encoder' not preserved: got %v", fullConfig["video_encoder"])
-	}
-	if fullConfig["quality_preset"] != "balanced" {
-		t.Errorf("Existing config field 'quality_preset' not preserved: got %v", fullConfig["quality_preset"])
 	}
 }
 
@@ -382,5 +392,189 @@ func TestRunFullBenchmarkSkipsCPU(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("Expected 0 results for CPU-only encoders, got %d", len(results))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IsCacheValid
+// ---------------------------------------------------------------------------
+
+func TestIsCacheValidMissing(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results: make(map[string]BenchmarkResult),
+		Version: "1",
+	}
+	if IsCacheValid(cache, "nonexistent") {
+		t.Error("IsCacheValid should return false for missing key")
+	}
+}
+
+func TestIsCacheValidFresh(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results: map[string]BenchmarkResult{
+			"key1": {
+				Encoder:   "hevc_nvenc",
+				FPS:       120.0,
+				Timestamp: time.Now(),
+				CacheKey:  "key1",
+			},
+		},
+		Version: "1",
+	}
+	if !IsCacheValid(cache, "key1") {
+		t.Error("IsCacheValid should return true for fresh entry")
+	}
+}
+
+func TestIsCacheValidExpired(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results: map[string]BenchmarkResult{
+			"key1": {
+				Encoder:   "hevc_nvenc",
+				FPS:       120.0,
+				Timestamp: time.Now().Add(-31 * 24 * time.Hour), // 31 days ago
+				CacheKey:  "key1",
+			},
+		},
+		Version: "1",
+	}
+	if IsCacheValid(cache, "key1") {
+		t.Error("IsCacheValid should return false for expired entry")
+	}
+}
+
+func TestIsCacheValidBoundary(t *testing.T) {
+	cache := &BenchmarkCache{
+		Results: map[string]BenchmarkResult{
+			"key1": {
+				Encoder:   "hevc_nvenc",
+				FPS:       120.0,
+				Timestamp: time.Now().Add(-29 * 24 * time.Hour), // 29 days ago — still valid
+				CacheKey:  "key1",
+			},
+		},
+		Version: "1",
+	}
+	if !IsCacheValid(cache, "key1") {
+		t.Error("IsCacheValid should return true for entry within 30-day window")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SaveCache additional edge cases
+// ---------------------------------------------------------------------------
+
+func TestSaveCacheCreatesNewFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "newconfig.json")
+
+	cache := &BenchmarkCache{
+		Version: "1",
+		Results: map[string]BenchmarkResult{
+			"key1": {
+				Encoder:   "hevc_nvenc",
+				FPS:       200.0,
+				Timestamp: time.Now(),
+				CacheKey:  "key1",
+			},
+		},
+	}
+	if err := SaveCache(configPath, cache); err != nil {
+		t.Fatalf("SaveCache should create new file: %v", err)
+	}
+
+	loaded, err := LoadCache(configPath)
+	if err != nil {
+		t.Fatalf("LoadCache after create: %v", err)
+	}
+	if _, ok := loaded.Results["key1"]; !ok {
+		t.Error("key1 not found after round-trip with new file")
+	}
+}
+
+func TestSaveCacheUpdatesExistingEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+
+	// Write initial cache
+	cache1 := &BenchmarkCache{
+		Version: "1",
+		Results: map[string]BenchmarkResult{
+			"k1": {Encoder: "hevc_nvenc", FPS: 100.0, Timestamp: time.Now(), CacheKey: "k1"},
+		},
+	}
+	if err := SaveCache(configPath, cache1); err != nil {
+		t.Fatalf("first SaveCache: %v", err)
+	}
+
+	// Update with new FPS
+	cache2 := &BenchmarkCache{
+		Version: "1",
+		Results: map[string]BenchmarkResult{
+			"k1": {Encoder: "hevc_nvenc", FPS: 250.0, Timestamp: time.Now(), CacheKey: "k1"},
+		},
+	}
+	if err := SaveCache(configPath, cache2); err != nil {
+		t.Fatalf("second SaveCache: %v", err)
+	}
+
+	loaded, err := LoadCache(configPath)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	if loaded.Results["k1"].FPS != 250.0 {
+		t.Errorf("FPS not updated: got %f, want 250.0", loaded.Results["k1"].FPS)
+	}
+}
+
+func TestSaveCachePreservesOtherFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+
+	// Write config with other fields
+	initial := map[string]interface{}{"video_encoder": "hevc_nvenc", "my_custom": "keep_me"}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		t.Fatalf("write initial config: %v", err)
+	}
+
+	cache := &BenchmarkCache{
+		Version: "1",
+		Results: make(map[string]BenchmarkResult),
+	}
+	if err := SaveCache(configPath, cache); err != nil {
+		t.Fatalf("SaveCache: %v", err)
+	}
+
+	raw, _ := os.ReadFile(configPath)
+	var full map[string]interface{}
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if full["video_encoder"] != "hevc_nvenc" {
+		t.Errorf("video_encoder not preserved: %v", full["video_encoder"])
+	}
+	if full["my_custom"] != "keep_me" {
+		t.Errorf("my_custom not preserved: %v", full["my_custom"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// LoadCache additional edge cases
+// ---------------------------------------------------------------------------
+
+func TestLoadCacheInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "bad.json")
+
+	// Write invalid JSON to the benchmark_cache.json file (not the config)
+	cachePath := CachePath(configPath)
+	if err := os.WriteFile(cachePath, []byte("{invalid json}"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := LoadCache(configPath)
+	if err == nil {
+		t.Error("LoadCache should return error for invalid JSON in benchmark cache file")
 	}
 }

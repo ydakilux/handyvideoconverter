@@ -75,7 +75,18 @@ func (db *DatabaseManager) loadDB(driveRoot string) {
 	dbPath := filepath.Join(driveRoot, "converted_files.json")
 	data, err := os.ReadFile(dbPath)
 	if err != nil {
-		// Try fallback location
+		if os.IsNotExist(err) {
+			// DB file doesn't exist yet. Only skip the fallback if the drive
+			// root itself is accessible (i.e. this is a new, writable location).
+			// If the drive root also doesn't exist, fall through to the fallback
+			// so records saved there on a previous run are still found.
+			if _, statErr := os.Stat(driveRoot); statErr == nil {
+				db.dbs[driveRoot] = make(map[string]types.Record)
+				return
+			}
+		}
+		// File exists but is unreadable, or the drive root is inaccessible —
+		// try the fallback cache location.
 		if fbPath := fallbackDBPath(driveRoot); fbPath != "" {
 			data, err = os.ReadFile(fbPath)
 		}

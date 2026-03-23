@@ -32,22 +32,18 @@ func TestNvencQualityArgs(t *testing.T) {
 		{"balanced_1080p", "balanced", 1920, []string{"-cq", "28", "-preset", "p5"}},
 		{"balanced_4k", "balanced", 3840, []string{"-cq", "30", "-preset", "p5"}},
 
-
 		{"hq_sd", "high_quality", 1024, []string{"-cq", "20", "-preset", "p7"}},
 		{"hq_720p", "high_quality", 1280, []string{"-cq", "22", "-preset", "p7"}},
 		{"hq_1080p", "high_quality", 1920, []string{"-cq", "24", "-preset", "p7"}},
 		{"hq_4k", "high_quality", 3840, []string{"-cq", "26", "-preset", "p7"}},
-
 
 		{"ss_sd", "space_saver", 640, []string{"-cq", "28", "-preset", "p4"}},
 		{"ss_720p", "space_saver", 1280, []string{"-cq", "30", "-preset", "p4"}},
 		{"ss_1080p", "space_saver", 1920, []string{"-cq", "32", "-preset", "p4"}},
 		{"ss_4k", "space_saver", 2560, []string{"-cq", "35", "-preset", "p4"}},
 
-
 		{"unknown_1080p", "custom", 1920, []string{"-cq", "28", "-preset", "p5"}},
 		{"empty_1080p", "", 1920, []string{"-cq", "28", "-preset", "p5"}},
-
 
 		{"uppercase_balanced", "BALANCED", 1920, []string{"-cq", "28", "-preset", "p5"}},
 		{"mixedcase_hq", "High_Quality", 1920, []string{"-cq", "24", "-preset", "p7"}},
@@ -112,6 +108,24 @@ func TestNvencParseError(t *testing.T) {
 			"[hevc_nvenc] InitializeEncoder failed",
 			true,
 			"NVENC: encoder initialization failed",
+		},
+		{
+			"driver_api_version_mismatch",
+			"[hevc_nvenc @ 0x...] Driver does not support the required nvenc API version. Required: 13.0 Found: 12.2",
+			true,
+			"NVENC: driver too old — update NVIDIA driver to use GPU encoding",
+		},
+		{
+			"minimum_driver_message",
+			"[hevc_nvenc @ 0x...] The minimum required Nvidia driver for nvenc is 570.0 or newer",
+			true,
+			"NVENC: driver too old — update NVIDIA driver to use GPU encoding",
+		},
+		{
+			"error_while_opening_encoder",
+			"[vost#0:0] [enc:hevc_nvenc] Error while opening encoder – maybe incorrect parameters such as bit_rate, rate, width or height",
+			true,
+			"NVENC: driver too old — update NVIDIA driver to use GPU encoding",
 		},
 		{
 			"normal_output",

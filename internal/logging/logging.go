@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -26,7 +27,12 @@ type SeqHook struct {
 	serverURL string
 	apiKey    string
 	client    *http.Client
+	mu        sync.Mutex
+	failures  int
+	disabled  bool
 }
+
+const seqMaxFailures = 5
 
 // NewSeqHook creates a new Seq hook
 func NewSeqHook(serverURL, apiKey string) *SeqHook {
@@ -42,8 +48,17 @@ func (hook *SeqHook) Levels() []logrus.Level {
 	return logrus.AllLevels
 }
 
-// Fire sends the log entry to Seq
+// Fire sends the log entry to Seq. After seqMaxFailures consecutive delivery
+// failures the hook disables itself and logs a single warning to stderr so that
+// a misconfigured Seq URL does not degrade encoding performance.
 func (hook *SeqHook) Fire(entry *logrus.Entry) error {
+	hook.mu.Lock()
+	if hook.disabled {
+		hook.mu.Unlock()
+		return nil
+	}
+	hook.mu.Unlock()
+
 	// Build Seq event
 	event := map[string]interface{}{
 		"@t":  entry.Time.Format(time.RFC3339Nano),
@@ -74,11 +89,46 @@ func (hook *SeqHook) Fire(entry *logrus.Entry) error {
 
 	resp, err := hook.client.Do(req)
 	if err != nil {
+		hook.mu.Lock()
+		hook.failures++
+		if hook.failures >= seqMaxFailures {
+			hook.disabled = true
+			hook.mu.Unlock()
+			fmt.Fprintf(os.Stderr, "WARNING: Seq logging disabled after %d consecutive failures (last error: %v)\n", seqMaxFailures, err)
+		} else {
+			hook.mu.Unlock()
+		}
 		return nil // Silently ignore Seq connection failures
 	}
 	defer resp.Body.Close()
 
+	// Reset failure counter on success.
+	hook.mu.Lock()
+	hook.failures = 0
+	hook.mu.Unlock()
+
 	return nil
+}
+
+// bufferWriter is an io.Writer that buffers all writes in memory.
+// Call Flush to replay the buffered content into a destination writer.
+type bufferWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *bufferWriter) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// Flush copies all buffered bytes to dst. Safe to call once.
+func (b *bufferWriter) Flush(dst io.Writer) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, err := io.Copy(dst, &b.buf)
+	return err
 }
 
 // SetupLogging creates and configures a logrus.Logger with file output,
@@ -97,9 +147,13 @@ func SetupLogging(serverURL, apiKey, logLevel, execDir string, consoleWriter io.
 		consoleWriter = os.Stdout
 	}
 
-	// Create log file with timestamp
+	// Create log file with timestamp inside a dedicated logs/ subdirectory.
+	logsDir := filepath.Join(execDir, "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create logs directory: %v\n", err)
+	}
 	logFileName := fmt.Sprintf("video-converter_%s.log", time.Now().Format("2006-01-02_15-04-05"))
-	logFilePath := filepath.Join(execDir, logFileName)
+	logFilePath := filepath.Join(logsDir, logFileName)
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
@@ -127,4 +181,40 @@ func SetupLogging(serverURL, apiKey, logLevel, execDir string, consoleWriter io.
 	}
 
 	return logger, cleanup
+}
+
+// SetupEarlyLogging creates a logger that buffers all output in memory until
+// the TUI is ready. Call the returned flush function once with the real writer
+// (e.g. tui.UI.Writer()) to open the log file and replay buffered content.
+//
+// This avoids the "double log file" problem that arises when SetupLogging is
+// called twice: once before the TUI starts (plain stdout) and once after.
+func SetupEarlyLogging(logLevel string) (*logrus.Logger, func(serverURL, apiKey, execDir string, consoleWriter io.Writer) (*logrus.Logger, func())) {
+	buf := &bufferWriter{}
+	early := logrus.New()
+	early.SetOutput(buf)
+	early.SetFormatter(&SimpleFormatter{})
+	level, err := logrus.ParseLevel(logLevel)
+	if err != nil {
+		level = logrus.InfoLevel
+	}
+	early.SetLevel(level)
+
+	flush := func(serverURL, apiKey, execDir string, consoleWriter io.Writer) (*logrus.Logger, func()) {
+		// Redirect early logger to discard so any lingering calls are silent.
+		early.SetOutput(io.Discard)
+
+		real, cleanup := SetupLogging(serverURL, apiKey, logLevel, execDir, consoleWriter)
+
+		// Replay buffered early output into the real logger's output writer.
+		if mw, ok := real.Out.(io.Writer); ok {
+			if err := buf.Flush(mw); err != nil {
+				real.Warnf("Failed to flush early log buffer: %v", err)
+			}
+		}
+
+		return real, cleanup
+	}
+
+	return early, flush
 }

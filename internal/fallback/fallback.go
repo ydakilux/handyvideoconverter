@@ -16,7 +16,12 @@ type FallbackManager struct {
 	interactive bool
 	stdin       io.Reader
 	logger      *logrus.Logger
-	mu          sync.Mutex
+	// promptMu serializes interactive GPU-error prompts so that concurrent
+	// worker goroutines don't interleave their output to stdin/stdout.
+	// It is intentionally held while blocking on stdin.Scan() because we want
+	// exactly one prompt at a time; subsequent goroutines queue up and receive
+	// the mutex only after the current user has answered.
+	promptMu sync.Mutex
 }
 
 func NewFallbackManager(interactive bool, stdinReader io.Reader, logger *logrus.Logger) *FallbackManager {
@@ -38,9 +43,8 @@ func (fm *FallbackManager) HandleGPUError(stderr string, enc encoder.Encoder, jo
 		return true, nil
 	}
 
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
+	fm.promptMu.Lock()
+	defer fm.promptMu.Unlock()
 
 	prompt := fmt.Sprintf("GPU encoding failed for %s: %s\nRetry with CPU? [Y/n] ", job, msg)
 	fmt.Fprint(logWriter{fm.logger}, prompt)

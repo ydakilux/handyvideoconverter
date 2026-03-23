@@ -3,9 +3,16 @@ package encoder
 import (
 	"context"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
+
+var amfQPTable = qualityTable{
+	{16, 18, 20, 22}, // high_quality
+	{20, 22, 24, 27}, // balanced
+	{24, 26, 28, 31}, // space_saver
+}
 
 // AmfEncoder implements Encoder for the AMD AMF (hevc_amf) codec.
 type AmfEncoder struct{}
@@ -20,9 +27,8 @@ func (e *AmfEncoder) Name() string {
 }
 
 func (e *AmfEncoder) QualityArgs(preset string, width int) []string {
-	qp := amfQP(preset, width)
-	qualityPreset := amfQuality(preset)
-	return []string{"-rc", "cqp", "-qp_i", qp, "-qp_p", qp, "-quality", qualityPreset}
+	qp := strconv.Itoa(qualityValue(preset, width, amfQPTable))
+	return []string{"-rc", "cqp", "-qp_i", qp, "-qp_p", qp, "-quality", amfQuality(preset)}
 }
 
 func (e *AmfEncoder) DeviceArgs(gpuIndex int) []string {
@@ -49,40 +55,6 @@ func (e *AmfEncoder) ParseError(stderr string) (bool, string) {
 		return true, "AMF: encoding error"
 	}
 	return false, ""
-}
-
-func amfQP(preset string, width int) string {
-	switch strings.ToLower(preset) {
-	case "high_quality":
-		if width <= 1024 {
-			return "16"
-		} else if width <= 1280 {
-			return "18"
-		} else if width <= 1920 {
-			return "20"
-		}
-		return "22"
-
-	case "space_saver":
-		if width <= 1024 {
-			return "24"
-		} else if width <= 1280 {
-			return "26"
-		} else if width <= 1920 {
-			return "28"
-		}
-		return "31"
-
-	default: // "balanced" and any unknown preset
-		if width <= 1024 {
-			return "20"
-		} else if width <= 1280 {
-			return "22"
-		} else if width <= 1920 {
-			return "24"
-		}
-		return "27"
-	}
 }
 
 func amfQuality(preset string) string {

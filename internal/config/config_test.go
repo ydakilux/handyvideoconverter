@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-
 	"video-converter/internal/types"
 )
 
@@ -148,77 +147,6 @@ func TestLoadConfigCreatesDefaultWhenMissing(t *testing.T) {
 	}
 }
 
-func TestDetermineQualityBalancedPreset(t *testing.T) {
-	cfg := types.Config{QualityPreset: "balanced"}
-
-	tests := []struct {
-		width int
-		want  string
-	}{
-		{640, "23"},  // SD
-		{1024, "23"}, // SD boundary
-		{1280, "25"}, // 720p
-		{1920, "27"}, // 1080p
-		{3840, "30"}, // 4K
-	}
-
-	for _, tt := range tests {
-		got := DetermineQuality(tt.width, cfg)
-		if got != tt.want {
-			t.Errorf("DetermineQuality(%d, balanced) = %q, want %q", tt.width, got, tt.want)
-		}
-	}
-}
-
-func TestDetermineQualityAllPresets(t *testing.T) {
-	tests := []struct {
-		preset string
-		width  int
-		want   string
-	}{
-		{"high_quality", 1920, "21"},
-		{"balanced", 1920, "27"},
-		{"space_saver", 1920, "30"},
-		{"unknown_preset", 1920, "27"}, // default falls back to balanced
-	}
-
-	for _, tt := range tests {
-		cfg := types.Config{QualityPreset: tt.preset}
-		got := DetermineQuality(tt.width, cfg)
-		if got != tt.want {
-			t.Errorf("DetermineQuality(%d, %s) = %q, want %q", tt.width, tt.preset, got, tt.want)
-		}
-	}
-}
-
-func TestDetermineQualityCustomValues(t *testing.T) {
-	cfg := types.Config{
-		QualityPreset:      "balanced",
-		CustomQualitySD:    15,
-		CustomQuality720p:  18,
-		CustomQuality1080p: 22,
-		CustomQuality4K:    28,
-	}
-
-	tests := []struct {
-		width int
-		want  string
-	}{
-		{640, "15"},  // Custom SD
-		{1024, "15"}, // Custom SD boundary
-		{1280, "18"}, // Custom 720p
-		{1920, "22"}, // Custom 1080p
-		{3840, "28"}, // Custom 4K
-	}
-
-	for _, tt := range tests {
-		got := DetermineQuality(tt.width, cfg)
-		if got != tt.want {
-			t.Errorf("DetermineQuality(%d, custom) = %q, want %q", tt.width, got, tt.want)
-		}
-	}
-}
-
 func TestAutoEncoderAccepted(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "auto_config.json")
@@ -302,7 +230,6 @@ func TestResolveExecutableRelativePath(t *testing.T) {
 	}
 }
 
-
 func TestConfigBackwardCompat(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "old_config.json")
@@ -336,9 +263,6 @@ func TestConfigBackwardCompat(t *testing.T) {
 	}
 	if cfg.GPUPreset != "" {
 		t.Errorf("GPUPreset = %q, want empty", cfg.GPUPreset)
-	}
-	if cfg.BenchmarkCache != nil {
-		t.Errorf("BenchmarkCache should be nil, got %v", cfg.BenchmarkCache)
 	}
 	if cfg.Rebenchmark {
 		t.Error("Rebenchmark should be false")
@@ -375,7 +299,6 @@ func TestRebenchmarkNotPersisted(t *testing.T) {
 		t.Errorf("JSON should not contain rebenchmark, got: %s", jsonStr)
 	}
 }
-
 
 // TestLoadConfigWithBenchmarkSaveCacheFormat verifies that LoadConfig succeeds
 // when the config file contains a benchmark_cache written by benchmark.SaveCache
@@ -423,8 +346,6 @@ func TestLoadConfigWithBenchmarkSaveCacheFormat(t *testing.T) {
 		t.Errorf("QualityPreset = %q, want %q", cfg.QualityPreset, "balanced")
 	}
 
-	// BenchmarkCache should be non-nil (raw JSON bytes preserved)
-	if cfg.BenchmarkCache == nil {
-		t.Error("BenchmarkCache should be non-nil when present in config")
-	}
+	// BenchmarkCache field is no longer in Config — loading a config that still
+	// contains "benchmark_cache" should silently ignore the unknown field.
 }

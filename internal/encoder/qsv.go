@@ -3,9 +3,16 @@ package encoder
 import (
 	"context"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
+
+var qsvGQTable = qualityTable{
+	{17, 19, 21, 23}, // high_quality
+	{21, 23, 25, 28}, // balanced
+	{25, 27, 30, 33}, // space_saver
+}
 
 // QsvEncoder implements Encoder for the hevc_qsv (Intel Quick Sync Video) codec.
 type QsvEncoder struct{}
@@ -20,9 +27,8 @@ func (e *QsvEncoder) Name() string {
 }
 
 func (e *QsvEncoder) QualityArgs(preset string, width int) []string {
-	gq := qsvGlobalQuality(preset, width)
-	qsvPresetName := qsvPreset(preset)
-	return []string{"-global_quality", gq, "-preset", qsvPresetName}
+	gq := strconv.Itoa(qualityValue(preset, width, qsvGQTable))
+	return []string{"-global_quality", gq, "-preset", qsvPreset(preset)}
 }
 
 func (e *QsvEncoder) DeviceArgs(gpuIndex int) []string {
@@ -51,40 +57,6 @@ func (e *QsvEncoder) ParseError(stderr string) (bool, string) {
 		return true, "QSV: encoding error"
 	}
 	return false, ""
-}
-
-func qsvGlobalQuality(preset string, width int) string {
-	switch strings.ToLower(preset) {
-	case "high_quality":
-		if width <= 1024 {
-			return "17"
-		} else if width <= 1280 {
-			return "19"
-		} else if width <= 1920 {
-			return "21"
-		}
-		return "23"
-
-	case "space_saver":
-		if width <= 1024 {
-			return "25"
-		} else if width <= 1280 {
-			return "27"
-		} else if width <= 1920 {
-			return "30"
-		}
-		return "33"
-
-	default: // "balanced" and any unknown preset
-		if width <= 1024 {
-			return "21"
-		} else if width <= 1280 {
-			return "23"
-		} else if width <= 1920 {
-			return "25"
-		}
-		return "28"
-	}
 }
 
 func qsvPreset(preset string) string {

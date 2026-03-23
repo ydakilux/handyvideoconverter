@@ -1,0 +1,61 @@
+{
+  "results": {
+    "d885394847b264d9ec86e5995da3cf72": {
+      "encoder": "hevc_nvenc",
+      "gpu_index": 0,
+      "fps": 221.48394241417498,
+      "speed_x": 7.382798080472499,
+      "wall_clock_ms": 2709,
+      "timestamp": "2026-03-22T09:13:11.7475799+01:00",
+      "cache_key": "d885394847b264d9ec86e5995da3cf72"
+    }
+  },
+  "parallel_results": {
+    "dbfa338767282f0dd0fe52d3f5b9db19": {
+      "encoder": "hevc_nvenc",
+      "best_parallelism": 4,
+      "best_fps": 257.5107296137339,
+      "runs": {
+        "1": {
+          "encoder": "hevc_nvenc",
+          "gpu_index": 0,
+          "fps": 238.85350318471336,
+          "speed_x": 7.961783439490445,
+          "wall_clock_ms": 2512,
+          "timestamp": "2026-03-22T09:13:14.2597182+01:00",
+          "cache_key": ""
+        },
+        "2": {
+          "encoder": "hevc_nvenc",
+          "gpu_index": 0,
+          "fps": 249.06600249066005,
+          "speed_x": 8.302200083022003,
+          "wall_clock_ms": 4818,
+          "timestamp": "2026-03-22T09:13:19.0784864+01:00",
+          "cache_key": ""
+        },
+        "3": {
+          "encoder": "hevc_nvenc",
+          "gpu_index": 0,
+          "fps": 256.51988029072254,
+          "speed_x": 8.550662676357417,
+          "wall_clock_ms": 7017,
+          "timestamp": "2026-03-22T09:13:26.0961393+01:00",
+          "cache_key": ""
+        },
+        "4": {
+          "encoder": "hevc_nvenc",
+          "gpu_index": 0,
+          "fps": 257.5107296137339,
+          "speed_x": 8.583690987124463,
+          "wall_clock_ms": 9320,
+          "timestamp": "2026-03-22T09:13:35.4166775+01:00",
+          "cache_key": ""
+        }
+      },
+      "timestamp": "2026-03-22T09:13:11.7475799+01:00",
+      "cache_key": "dbfa338767282f0dd0fe52d3f5b9db19"
+    }
+  },
+  "version": "1"
+}

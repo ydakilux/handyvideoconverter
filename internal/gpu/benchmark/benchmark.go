@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -310,27 +311,18 @@ func LoadCache(configPath string) (*BenchmarkCache, error) {
 		Version:         "1",
 	}
 
-	data, err := os.ReadFile(configPath)
+	cachePath := CachePath(configPath)
+	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return emptyCache, nil
 		}
-		return nil, fmt.Errorf("read config: %w", err)
-	}
-
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-
-	cacheData, ok := raw["benchmark_cache"]
-	if !ok {
-		return emptyCache, nil
+		return nil, fmt.Errorf("read benchmark cache: %w", err)
 	}
 
 	var cache BenchmarkCache
-	if err := json.Unmarshal(cacheData, &cache); err != nil {
-		return nil, fmt.Errorf("parse benchmark_cache: %w", err)
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, fmt.Errorf("parse benchmark cache: %w", err)
 	}
 	if cache.Results == nil {
 		cache.Results = make(map[string]BenchmarkResult)
@@ -343,41 +335,28 @@ func LoadCache(configPath string) (*BenchmarkCache, error) {
 }
 
 func SaveCache(configPath string, cache *BenchmarkCache) error {
-	var raw map[string]json.RawMessage
+	cachePath := CachePath(configPath)
 
-	data, err := os.ReadFile(configPath)
+	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
-		if os.IsNotExist(err) {
-			raw = make(map[string]json.RawMessage)
-		} else {
-			return fmt.Errorf("read config: %w", err)
-		}
-	} else {
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parse config: %w", err)
-		}
+		return fmt.Errorf("marshal benchmark cache: %w", err)
 	}
 
-	cacheJSON, err := json.Marshal(cache)
-	if err != nil {
-		return fmt.Errorf("marshal benchmark_cache: %w", err)
+	tmpPath := cachePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("write benchmark cache tmp: %w", err)
 	}
-	raw["benchmark_cache"] = cacheJSON
-
-	output, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, output, 0644); err != nil {
-		return fmt.Errorf("write tmp config: %w", err)
-	}
-	if err := os.Rename(tmpPath, configPath); err != nil {
-		return fmt.Errorf("rename config: %w", err)
+	if err := os.Rename(tmpPath, cachePath); err != nil {
+		return fmt.Errorf("rename benchmark cache: %w", err)
 	}
 
 	return nil
+}
+
+// CachePath returns the path to the benchmark cache file that lives
+// beside the config file. The config file itself is never modified.
+func CachePath(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "benchmark_cache.json")
 }
 
 func IsCacheValid(cache *BenchmarkCache, key string) bool {

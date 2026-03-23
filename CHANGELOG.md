@@ -1,259 +1,104 @@
-# Video Converter - Recent Improvements
+# Changelog
 
+All notable changes to this project will be documented in this file.
 
-## GPU Adaptive Encoding (Feb 2026)
-
-### GPU Auto-Detection
-- Automatically detects and selects the best available hardware encoder at startup
-- Trial-encode verification ensures the encoder actually works, not just reported as available
-- Falls back to CPU (`libx265`) if no working GPU encoder is found
-- Interactive or automatic fallback when GPU encoding fails mid-conversion
-
-### Multi-Encoder Support
-- **NVIDIA NVENC** (`hevc_nvenc`): uses `-cq` quality flag with presets p4/p5/p7
-- **AMD AMF** (`hevc_amf`): uses `-rc cqp -qp_i/-qp_p` with quality presets balanced/quality/speed
-- **Intel QSV** (`hevc_qsv`): uses `-global_quality` (ICQ mode) with presets faster/medium/veryslow
-- **CPU libx265**: uses `-crf` with presets faster/medium/slow
-
-### GPU Benchmarking
-- Measures GPU encoding speed at startup using a short trial encode
-- Caches benchmark results so subsequent runs skip the benchmark step
-- Use `--rebenchmark` to force a fresh benchmark if results are stale
-
-### Encoder-Specific Quality Normalization
-Each encoder uses its own quality parameter tuned per resolution:
-- NVENC: `-cq` values (20-35 depending on preset and resolution)
-- AMF: `-qp_i`/`-qp_p` values (16-31 depending on preset and resolution)
-- QSV: `-global_quality` values (17-33 depending on preset and resolution)
-- libx265: `-crf` values (19-33 depending on preset and resolution)
-
-### New CLI Flags
-- `--encoder auto` (now the default): auto-detect best available encoder
-- `--non-interactive`: disable interactive prompts, auto-fallback to CPU on GPU failure
-- `--rebenchmark`: force GPU benchmark even if cached results exist
-
-### Multi-GPU Distribution
-- NVIDIA GPUs distributed speed-balanced based on benchmark results
-- Each GPU gets work proportional to its throughput
-- AMD and Intel: single-GPU only (FFmpeg doesn't support device selection for these encoders)
-
-### Code Reorganization
-- Full package refactor: code reorganized into `internal/` packages
-- `internal/encoder/`: encoder interface and per-encoder implementations
-- `internal/config/`, `internal/database/`, `internal/conversion/`, `internal/discovery/`
-- `internal/gpu/`: GPU detection, benchmarking, and fallback management
-
-### Bug Fixes
-- Fixed database lock promotion race condition (RLock to Lock upgrade)
-- Comprehensive TDD test suite for all new packages
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## Changes Made (Feb 11, 2026)
+## [Unreleased]
 
-### 1. Removed Progress Bar Conflicts
-- **Issue**: Progress bar and log messages were overlapping, creating messy output
-- **Solution**: Disabled the progressbar library to allow clean log output
-- **Result**: Clean, readable console output with file-by-file progress
+### Added
+- Comprehensive test suite: 13 packages, 100+ tests, `go test -race ./...` clean
+- `internal/tui` package tests (Bubble Tea model, key handling, render helpers)
+- `internal/pipeline/control` tests (pause/resume, stop variants, suspend-fn callbacks, concurrency)
+- `internal/ffmpeg` integration tests (real ffprobe/ffmpeg via `lookupExe` helper)
+- `internal/gpu/benchmark` tests (`IsCacheValid`, `SaveCache`, `LoadCache` edge cases)
+- `compat_test.go` helpers: `getDriveRoot`, `sanitizeFolderName`, `formatBytes`, `fmtElapsed`, `buildConversionArgs`
+- `Makefile` targets: `test-short`, `test-cover`, `cover-html`
 
-### 2. Enhanced Per-File Conversion Output
-Each file now shows a detailed summary box:
+---
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│ File: video_name.mp4                                           │
-├────────────────────────────────────────────────────────────────┤
-│ Original Size:    245.67 MB                                    │
-│ New Size:         198.34 MB                                    │
-│ Saved:             47.33 MB (19.3% reduction)                  │
-├────────────────────────────────────────────────────────────────┤
-│ Result: ✓ KEPT - File will be saved                           │
-└────────────────────────────────────────────────────────────────┘
-```
+## [0.4.0] - 2026-02-28
 
-Or for discarded files:
+### Added
+- Interactive TUI powered by Bubble Tea v1 — live per-file progress bars, log panel, control bar
+- `internal/tui` package with plain-mode fallback when stdout is not a TTY
+- Pause / Resume / Stop-now / Stop-after-current keyboard controls (`p`, `s`, `q`) in TUI
+- `internal/pipeline/control` — `Controller` with `CheckPause`, `SuspendFn`, `StopNow`, `StopAfterCurrent`
+- `cmd/benchmark` sub-command for measuring optimal `--jobs` value across a sample folder
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│ File: video_name.mp4                                           │
-├────────────────────────────────────────────────────────────────┤
-│ Original Size:    245.67 MB                                    │
-│ New Size:         267.89 MB                                    │
-│ Increased:         22.22 MB (+9.0%)                            │
-├────────────────────────────────────────────────────────────────┤
-│ Result: ✗ DISCARDED - File not improved, keeping original     │
-└────────────────────────────────────────────────────────────────┘
-```
+### Changed
+- Producer-consumer pipeline wired through `Controller` for cooperative pause/stop
+- Progress reporting moved from plain `log.Infof` to TUI `msgProgress` messages
 
-### 3. Improved Final Summary Statistics
-Enhanced the end-of-run summary to show:
+---
 
-```
-╔════════════════════════════════════════════════════════════════╗
-║           VIDEO CONVERSION SUMMARY                             ║
-╠════════════════════════════════════════════════════════════════╣
-║ Files Analyzed:     25                                         ║
-║ Files Converted:    12                                         ║
-║   → Improved:       3                                          ║
-║   → Discarded:      9                                          ║
-║ Files Skipped:      11                                         ║
-║ Files Errored:      2                                          ║
-╠════════════════════════════════════════════════════════════════╣
-║ Original Size:      2.5 GB                                     ║
-║ Final Size:         1.8 GB                                     ║
-║ Space Saved:        700.0 MB (28.0%)                           ║
-╚════════════════════════════════════════════════════════════════╝
-```
+## [0.3.0] - 2026-02-20
 
-### 4. Enhanced File Analysis Progress
-- Shows current file being analyzed: `[5/25] Analyzing: video.mp4`
-- Clear indication of what the tool is doing at each step
+### Added
+- GPU auto-detection at startup: NVIDIA NVENC, AMD AMF, Intel QSV
+- Trial-encode verification — encoder is tested with a short clip before committing to it
+- GPU benchmark: measures encoding speed, caches result, honours `--rebenchmark` flag
+- Multi-GPU distribution for NVIDIA: work split proportional to benchmark throughput
+- `internal/gpu/benchmark`, `internal/gpu/detect`, `internal/gpu/nvidia` packages
+- `internal/fallback` — interactive or automatic CPU fallback when GPU encoding fails mid-run
+- `internal/encoder` — per-encoder quality normalization (CRF, CQ, QP, global_quality)
+- `--encoder` flag (`auto` | `hevc_nvenc` | `hevc_amf` | `hevc_qsv` | `libx265`)
+- `--non-interactive` flag — skip GPU fallback prompt, auto-fall back to CPU
+- `--rebenchmark` flag — force fresh GPU benchmark even if cached results exist
+- `--jobs` flag — explicit parallel job count; `0` uses benchmark recommendation
+- `--bypass` flag — re-convert files already recorded in the database
+- `--force-hevc` flag — re-compress files already in H.265/HEVC format
+- `--same-drive` flag — write output to source drive, skipping the drive prompt
+- Three quality presets: `high_quality`, `balanced` (default), `space_saver`
+- Per-resolution custom quality overrides in config (`custom_quality_sd` … `custom_quality_4k`)
 
-### 5. Better Size Display
-- All sizes now shown in MB with 2 decimal precision
-- Easy to compare before/after at a glance
-- Immediate feedback on whether conversion was beneficial
+### Changed
+- Full package refactor into `internal/` sub-packages (`config`, `database`, `encoder`, `ffmpeg`, `gpu/*`, `fallback`, `logging`, `pipeline`, `tui`, `types`)
+- Default encoder changed from `libx265` to `auto`
+- Config field `video_encoder` replaces old single-encoder field
 
-### 6. Improved Statistics Tracking
-New statistics tracked:
-- **Files Analyzed**: Total files discovered and checked
-- **Files Converted**: Files that went through FFmpeg conversion
-- **Files Improved**: Conversions that resulted in smaller files (kept)
-- **Files Discarded**: Conversions that resulted in larger files (removed)
-- **Files Skipped**: Files skipped due to cache or already HEVC
-- **Files Errored**: Files that failed during processing
+### Fixed
+- Database lock promotion race condition (RLock → Lock upgrade)
 
-## Benefits
+---
 
-1. **Immediate Feedback**: You know right away if a conversion was successful
-2. **No More Confusion**: Clear distinction between kept and discarded files
-3. **Better Decision Making**: Size comparisons in MB make it easy to understand impact
-4. **Comprehensive Summary**: Full statistics at the end show overall effectiveness
-5. **Clean Output**: No more overlapping progress bars and log messages
+## [0.2.0] - 2026-02-11
 
-## Usage
+### Added
+- Per-file conversion summary box (original size, new size, saved/increased, kept/discarded)
+- Final statistics summary with files analyzed, converted, improved, discarded, skipped, errored
+- `[N/Total] Analyzing:` progress line during file discovery phase
 
-Run the same way as before:
-```bash
-./video-converter.exe V:\________Done\tempo\
-```
+### Changed
+- FFmpeg progress reporting interval changed from 5 % to 10 %
+- File analysis log messages moved to DEBUG level to reduce console noise
+- Timestamps removed from console output (still sent to Seq)
 
-The improved output will automatically show detailed results for each file processed.
+### Fixed
+- Progress bar and log messages no longer overlap in console output
 
-## Additional Formatting Improvements (Feb 11, 2026 - 19:14)
+---
 
-### Issues Fixed:
-1. **Removed verbose timestamps** - Console output no longer shows `time="2026-02-11T19:10:58+01:00"` on every line
-2. **Reduced analysis verbosity** - File analysis messages moved to DEBUG level to avoid clutter
-3. **Cleaner progress reporting** - FFmpeg progress now shows every 10% instead of every 5%
-4. **Better visual separation** - Added header separators when starting each conversion
+## [0.1.0] - 2026-02-01
 
-### New Output Format:
+### Added
+- Batch video conversion to HEVC/H.265 via FFmpeg
+- Per-drive BLAKE3 hash-based cache (`D:\converted_files.json`) to skip already-converted files
+- Partial hash mode (16 MB start + middle + end + file size) for fast large-file identification
+- Producer-consumer pipeline with configurable queue size (`max_queue_size`)
+- Output structure: `<drive>\HSORTED\<source-folder>\<filename>.mp4`
+- Atomic temp-file writes (`__tmp__<hash8>.mp4` → rename)
+- MKV passthrough: preserves all audio/subtitle streams and metadata
+- Optional Seq logging via custom `SeqHook` (logrus hook, HTTP POST, `X-Seq-ApiKey`)
+- Auto-opens output folder in Explorer on completion (Windows)
+- `configVideoConversion.json` auto-created with defaults on first run
+- `--dry-run` flag — preview without writing any files
+- `--config` flag — path to config file
 
-```
-Force re-conversion (bypass DB check)? [y/N]: n
-Test re-compression even if file is already HEVC? [y/N]: n
-INFO Discovering files...
-INFO Found 25 files to process
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Converting: video_name.mp4 (1080p)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Progress: 10%
-Progress: 20%
-Progress: 30%
-Progress: 40%
-Progress: 50%
-Progress: 60%
-Progress: 70%
-Progress: 80%
-Progress: 90%
-Progress: 100%
-┌────────────────────────────────────────────────────────────────┐
-│ File: video_name.mp4                                           │
-├────────────────────────────────────────────────────────────────┤
-│ Original Size:    245.67 MB                                    │
-│ New Size:         198.34 MB                                    │
-│ Saved:             47.33 MB (19.3% reduction)                  │
-├────────────────────────────────────────────────────────────────┤
-│ Result: ✓ KEPT - File will be saved                           │
-└────────────────────────────────────────────────────────────────┘
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Converting: another_video.mp4 (1920p)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Progress: 10%
-...
-```
-
-### Benefits:
-- **Much cleaner output** - No timestamp clutter
-- **Easier to read** - Clear visual separation between files
-- **Less noise** - Only important progress updates shown
-- **Professional appearance** - Clean, organized console output
-
-### Notes:
-- Timestamps are still sent to Seq for proper logging
-- Use `--log-level DEBUG` if you need to see file analysis details
-- Progress bar library removed from imports (no longer needed)
-
-## Quality Settings Update (Feb 11, 2026 - 19:20)
-
-### New Features
-
-#### 1. Configurable Quality Settings
-Added flexible quality control through `configVideoConversion.json`:
-
-**New Config Fields:**
-```json
-{
-  "quality_preset": "balanced",
-  "custom_quality_sd": 0,
-  "custom_quality_720p": 0,
-  "custom_quality_1080p": 0,
-  "custom_quality_4k": 0
-}
-```
-
-#### 2. Three Quality Presets
-
-**high_quality** - Maximum quality, may increase file size
-- Best for: Archival, high-quality sources
-- CQ values: 19-23
-
-**balanced** - New default, good quality with space savings
-- Best for: Most use cases
-- CQ values: 23-30
-- Expected: 20-40% size reduction
-
-**space_saver** - Maximum compression
-- Best for: Already compressed videos (your case!)
-- CQ values: 26-33
-- Expected: 40-60% size reduction
-
-#### 3. Custom Per-Resolution Quality
-Override presets with exact CQ values for each resolution.
-
-### Why This Matters
-
-**Your Issue:** Files were getting LARGER (284 MB → 403 MB)
-
-**Cause:** Old default used CQ 19-21 (very high quality), re-encoding already compressed videos at higher quality than source.
-
-**Solution:** New default is "balanced" (CQ 23-30), or use "space_saver" for maximum compression.
-
-### Migration
-
-**Existing configs:** Will use new "balanced" preset (safer than old high-quality default)
-
-**To match old behavior:** Set `"quality_preset": "high_quality"`
-
-**To fix your issue:** Set `"quality_preset": "space_saver"`
-
-### Documentation
-
-See `QUALITY_SETTINGS.md` for complete guide with:
-- Detailed preset explanations
-- Custom quality examples
-- Troubleshooting guide
-- Expected results table
+[Unreleased]: https://github.com/your-org/handyvideoconverter/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/your-org/handyvideoconverter/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/your-org/handyvideoconverter/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/your-org/handyvideoconverter/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/your-org/handyvideoconverter/releases/tag/v0.1.0

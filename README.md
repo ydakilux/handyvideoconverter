@@ -118,7 +118,11 @@ video-converter.exe [flags] <directory>
 |------|---------|-------------|
 | `--config` | `configVideoConversion.json` | Path to config file |
 | `--dry-run` | `false` | Preview mode, no actual conversion |
-| `--encoder` | `auto` | Encoder selection: `auto`, `hevc_nvenc`, `hevc_amf`, `hevc_qsv`, `libx265` |
+| `--encoder` | `auto` | Encoder: `auto`, `hevc_nvenc`, `hevc_amf`, `hevc_qsv`, `libx265` |
+| `--bypass` | `false` | Re-convert files already recorded in the cache database |
+| `--force-hevc` | `false` | Re-compress files that are already H.265/HEVC |
+| `--same-drive` | `false` | Write output to the same drive as source (skips drive prompt) |
+| `--jobs` | `0` | Parallel conversion jobs; `0` uses benchmark recommendation |
 | `--non-interactive` | `false` | Disable interactive prompts (auto-fallback to CPU on GPU failure) |
 | `--rebenchmark` | `false` | Force GPU benchmark even if cached results exist |
 
@@ -135,6 +139,12 @@ video-converter.exe --config myconfig.json D:\Videos\
 
 # Force a specific encoder
 video-converter.exe --encoder libx265 D:\Videos\
+
+# Re-convert everything, even already-cached or already-HEVC files
+video-converter.exe --bypass --force-hevc D:\Videos\
+
+# Use 4 parallel jobs and write output to the same drive (no prompts)
+video-converter.exe --jobs 4 --same-drive D:\Videos\
 
 # Non-interactive mode (good for scripts/scheduled tasks)
 video-converter.exe --non-interactive D:\Videos\
@@ -278,7 +288,7 @@ video-converter.exe --non-interactive --encoder auto D:\Videos\
 
 **Solution:** 
 - This is normal. Original files are already efficient.
-- Use `--force-hevc` flag to re-encode anyway (may not improve size)
+- Use `--bypass --force-hevc` flags to re-encode anyway (may not improve size)
 
 ### FFmpeg not found
 **Problem:** FFmpeg executable not in expected location.

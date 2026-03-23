@@ -1,18 +1,72 @@
 {
-  "server_url": "http://localhost:5341/",
   "api_key": "",
-  "use_partial_hash": true,
-  "max_queue_size": 3,
-  "mediainfo_path": "MediaInfo_CLI_24.04_Windows_x64\\MediaInfo.exe",
-  "ffmpeg_path": "ffmpeg\\bin\\ffmpeg.exe",
-  "ffprobe_path": "",
-  "temp_directory": "",
-  "video_encoder": "hevc_nvenc",
-  "quality_preset": "balanced",
-  "custom_quality_sd": 0,
-  "custom_quality_720p": 0,
+  "benchmark_cache": {
+    "results": {
+      "d885394847b264d9ec86e5995da3cf72": {
+        "encoder": "hevc_nvenc",
+        "gpu_index": 0,
+        "fps": 233.91812865497076,
+        "speed_x": 7.797270955165692,
+        "wall_clock_ms": 2565,
+        "timestamp": "2026-03-08T19:37:38.1116116+01:00",
+        "cache_key": "d885394847b264d9ec86e5995da3cf72"
+      }
+    },
+    "parallel_results": {
+      "dbfa338767282f0dd0fe52d3f5b9db19": {
+        "encoder": "hevc_nvenc",
+        "best_parallelism": 4,
+        "best_fps": 264.0554516448454,
+        "runs": {
+          "1": {
+            "encoder": "hevc_nvenc",
+            "gpu_index": 0,
+            "fps": 237.34177215189874,
+            "speed_x": 7.9113924050632916,
+            "wall_clock_ms": 2528,
+            "timestamp": "2026-03-08T19:37:40.6624552+01:00",
+            "cache_key": ""
+          },
+          "2": {
+            "encoder": "hevc_nvenc",
+            "gpu_index": 0,
+            "fps": 253.3783783783784,
+            "speed_x": 8.445945945945946,
+            "wall_clock_ms": 4736,
+            "timestamp": "2026-03-08T19:37:45.4126349+01:00",
+            "cache_key": ""
+          },
+          "3": {
+            "encoder": "hevc_nvenc",
+            "gpu_index": 0,
+            "fps": 258.39793281653743,
+            "speed_x": 8.613264427217915,
+            "wall_clock_ms": 6966,
+            "timestamp": "2026-03-08T19:37:52.3841336+01:00",
+            "cache_key": ""
+          },
+          "4": {
+            "encoder": "hevc_nvenc",
+            "gpu_index": 0,
+            "fps": 264.0554516448454,
+            "speed_x": 8.801848388161513,
+            "wall_clock_ms": 9089,
+            "timestamp": "2026-03-08T19:38:01.4868267+01:00",
+            "cache_key": ""
+          }
+        },
+        "timestamp": "2026-03-08T19:37:38.1164127+01:00",
+        "cache_key": "dbfa338767282f0dd0fe52d3f5b9db19"
+      }
+    },
+    "version": "1"
+  },
   "custom_quality_1080p": 0,
   "custom_quality_4k": 0,
+  "custom_quality_720p": 0,
+  "custom_quality_sd": 0,
+  "ffmpeg_path": "ffmpeg\\bin\\ffmpeg.exe",
+  "ffprobe_path": "",
   "file_extensions": [
     ".MOV",
     ".AVI",
@@ -26,5 +80,12 @@
     ".TS",
     ".M2TS"
   ],
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "max_queue_size": 3,
+  "mediainfo_path": "MediaInfo_CLI_24.04_Windows_x64\\MediaInfo.exe",
+  "quality_preset": "balanced",
+  "server_url": "http://localhost:5341/",
+  "temp_directory": "",
+  "use_partial_hash": true,
+  "video_encoder": "hevc_nvenc"
 }

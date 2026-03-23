@@ -1,0 +1,158 @@
+// Package fileutil provides shared file path helpers, string formatting
+// utilities, and the BLAKE3-based file hashing used across the converter pipeline.
+package fileutil
+
+import (
+	"encoding/binary"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/zeebo/blake3"
+)
+
+// GetDriveRoot returns the Windows drive root for filePath (e.g. "D:\").
+// Returns "/" for paths with no volume name (relative paths, non-Windows).
+func GetDriveRoot(filePath string) string {
+	vol := filepath.VolumeName(filePath)
+	if vol == "" {
+		return "/"
+	}
+	return vol + "\\"
+}
+
+// GetParentFolderName returns the immediate parent folder name of filePath
+// relative to driveRoot. Returns "ROOT" when the file sits directly on the drive.
+func GetParentFolderName(filePath, driveRoot string) string {
+	dir := filepath.Dir(filePath)
+	if dir == driveRoot || dir == strings.TrimSuffix(driveRoot, "\\") {
+		return "ROOT"
+	}
+	return filepath.Base(dir)
+}
+
+// GetRelativePath returns the path from driveRoot to the file's directory.
+// Returns "ROOT" when the file sits directly on the drive.
+func GetRelativePath(filePath, driveRoot string) string {
+	dir := filepath.Dir(filePath)
+
+	driveRoot = filepath.Clean(driveRoot)
+	dir = filepath.Clean(dir)
+
+	if dir == driveRoot {
+		return "ROOT"
+	}
+
+	relPath, err := filepath.Rel(driveRoot, dir)
+	if err != nil {
+		return filepath.Base(dir)
+	}
+	return filepath.Clean(relPath)
+}
+
+// SanitizeFolderName replaces Windows-invalid characters in each path segment
+// with underscores while preserving path separators.
+func SanitizeFolderName(name string) string {
+	parts := strings.Split(name, string(filepath.Separator))
+	invalid := []string{":", "*", "?", "\"", "<", ">", "|"}
+	for i, part := range parts {
+		result := part
+		for _, char := range invalid {
+			result = strings.ReplaceAll(result, char, "_")
+		}
+		parts[i] = result
+	}
+	return filepath.Join(parts...)
+}
+
+// GetFileHash returns a hex-encoded BLAKE3 hash for filePath.
+// When partial is true, only the first 16 MB, middle 16 MB, last 16 MB, and
+// the file size are hashed — fast and sufficient for large media files.
+// Returns ("error_hash", 0) on any I/O failure.
+func GetFileHash(filePath string, partial bool) (string, float64) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "error_hash", 0.0
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "error_hash", 0.0
+	}
+	fileSize := info.Size()
+
+	hasher := blake3.New()
+
+	if partial {
+		const chunkSize = 16 * 1024 * 1024 // 16 MB
+
+		buf := make([]byte, chunkSize)
+		n, _ := io.ReadFull(f, buf)
+		hasher.Write(buf[:n])
+
+		if fileSize > chunkSize*2 {
+			middle := fileSize / 2
+			f.Seek(middle, 0) //nolint:errcheck
+			n, _ = io.ReadFull(f, buf)
+			hasher.Write(buf[:n])
+		}
+
+		if fileSize > chunkSize {
+			f.Seek(-chunkSize, 2) //nolint:errcheck
+			n, _ = io.ReadFull(f, buf)
+			hasher.Write(buf[:n])
+		}
+
+		sizeBuf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(sizeBuf, uint64(fileSize))
+		hasher.Write(sizeBuf)
+	} else {
+		buf := make([]byte, 128*1024)
+		if _, err := io.CopyBuffer(hasher, f, buf); err != nil {
+			return "error_hash", 0.0
+		}
+	}
+
+	return fmt.Sprintf("%x", hasher.Sum(nil)), 0.0
+}
+
+// FormatBytes returns a human-readable size string (e.g. "1.5 MB").
+func FormatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// FmtElapsed formats a duration as "Xh MMm SSs" or "Mm SSs".
+func FmtElapsed(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	s := int(d.Seconds()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
+	}
+	return fmt.Sprintf("%dm %02ds", m, s)
+}
+
+// TruncateString shortens s to maxLen characters, appending "..." if truncated.
+func TruncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
+}

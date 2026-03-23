@@ -123,9 +123,28 @@ type msgJobComplete struct {
 
 type msgLog struct{ text string }
 
+// msgShowSummary is sent when all conversions are done.  The lines are appended
+// to the log and the TUI enters "summary ready" mode where Enter/q quits.
+type msgShowSummary struct{ lines []string }
+
 type msgStartTimer struct{}
 
 type msgTick time.Time
+
+// msgControlState updates the displayed control state (paused / stopping).
+type msgControlState struct {
+	paused   bool
+	stopping StopKind
+}
+
+// StopKind distinguishes the three control states visible in the status bar.
+type StopKind int
+
+const (
+	StopKindNone         StopKind = iota
+	StopKindAfterCurrent          // "stopping after current…"
+	StopKindNow                   // "cancelling…"
+)
 
 type completionKind int
 
@@ -171,11 +190,25 @@ func (j *jobState) eta() string {
 	return "~" + fmtDuration(remaining.Round(time.Second))
 }
 
+// ── Phase enum ────────────────────────────────────────────────────────────────
+
+type tuiPhase int
+
+const (
+	phaseSetup      tuiPhase = iota // setup questions (folder picker + yes/no + numeric)
+	phaseConverting                 // main conversion display
+)
+
 // ── Model ─────────────────────────────────────────────────────────────────────
 
 const maxLogLines = 200
 
 type model struct {
+	phase tuiPhase
+	setup setupModel
+	// answersCh receives the SetupAnswers once setup completes and is then closed.
+	answersCh chan<- SetupAnswers
+
 	width       int
 	height      int
 	jobs        []*jobState          // active jobs, in insertion order
@@ -185,32 +218,196 @@ type model struct {
 	vpReady     bool
 	timerStart  time.Time
 	timerActive bool
+	// scroll state: true when the user has manually scrolled up
+	userScrolled bool
+	// summaryReady is true after ShowSummary has delivered its lines; in this
+	// state Enter/q quits the TUI instead of triggering control actions.
+	summaryReady bool
+	// control state
+	paused    bool
+	stopKind  StopKind
+	onControl func(action controlAction) // called on key press
+	// onScreenReady is called once on the first WindowSizeMsg (either phase).
+	onScreenReady func()
+	// onReady is called once after the converting phase viewport is initialised.
+	onReady func()
 }
+
+type controlAction int
+
+const (
+	actionPause controlAction = iota // toggle pause/resume
+	actionStopAfterCurrent
+	actionStopNow
+)
 
 type logLine struct {
 	text string
 	kind completionKind
 }
 
-func initialModel() model {
+func initialModel(setupOpts SetupOptions, answersCh chan<- SetupAnswers) model {
+	sm := newSetupModel(setupOpts)
+	phase := phaseSetup
+	// If setup has nothing to ask, skip straight to converting and deliver
+	// zero-value answers immediately.
+	if sm.done() {
+		close(answersCh)
+		phase = phaseConverting
+	}
 	return model{
-		width:    80,
-		height:   24,
-		jobIndex: make(map[uint64]*jobState),
+		phase:     phase,
+		setup:     sm,
+		answersCh: answersCh,
+		width:     80,
+		height:    24,
+		jobIndex:  make(map[uint64]*jobState),
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tickCmd()
+	if m.phase == phaseSetup {
+		return tea.Batch(m.setup.init(), tickCmd(), tea.EnableMouseCellMotion)
+	}
+	return tea.Batch(tickCmd(), tea.EnableMouseCellMotion)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// ── Setup phase ───────────────────────────────────────────────────────────
+	if m.phase == phaseSetup {
+		// Always propagate window size to setup sub-model.
+		if ws, ok := msg.(tea.WindowSizeMsg); ok {
+			m.width = ws.Width
+			m.height = ws.Height
+			// Signal alt-screen is ready.
+			if m.onScreenReady != nil {
+				fn := m.onScreenReady
+				m.onScreenReady = nil
+				go fn()
+			}
+			var cmd tea.Cmd
+			m.setup, cmd = m.setup.update(msg)
+			return m, cmd
+		}
+
+		var cmd tea.Cmd
+		m.setup, cmd = m.setup.update(msg)
+
+		if m.setup.done() {
+			// Deliver answers and transition phase.
+			if m.answersCh != nil {
+				m.answersCh <- m.setup.answers
+				close(m.answersCh)
+				m.answersCh = nil
+			}
+			m.phase = phaseConverting
+			// Fire onReady immediately if we already have a size; otherwise
+			// wait for the first WindowSizeMsg in converting phase.
+			if m.width > 0 && m.height > 0 {
+				m.vp = viewport.New(m.logViewportWidth(), m.logViewportHeight())
+				m.vp.SetContent(m.renderLogContent())
+				m.vp.GotoBottom()
+				m.vpReady = true
+				if m.onReady != nil {
+					fn := m.onReady
+					m.onReady = nil
+					return m, tea.Batch(cmd, func() tea.Msg { fn(); return nil })
+				}
+			}
+		}
+		return m, cmd
+	}
+
+	// ── Converting phase ──────────────────────────────────────────────────────
 	switch msg := msg.(type) {
+
+	case tea.KeyMsg:
+		// In summary-ready mode the only action is to quit.
+		if m.summaryReady {
+			switch msg.String() {
+			case "enter", "q", "Q", "ctrl+c", " ":
+				return m, tea.Quit
+			}
+			// still allow scroll keys
+		}
+		// Scroll keys go to the viewport; all others go to control handler.
+		switch msg.String() {
+		case "up", "k":
+			if m.vpReady {
+				m.vp.LineUp(1)
+				m.userScrolled = !m.vp.AtBottom()
+			}
+			return m, nil
+		case "down", "j":
+			if m.vpReady {
+				m.vp.LineDown(1)
+				m.userScrolled = !m.vp.AtBottom()
+			}
+			return m, nil
+		case "pgup", "b":
+			if m.vpReady {
+				m.vp.HalfViewUp()
+				m.userScrolled = !m.vp.AtBottom()
+			}
+			return m, nil
+		case "pgdown", "f", " ":
+			if m.vpReady {
+				m.vp.HalfViewDown()
+				m.userScrolled = !m.vp.AtBottom()
+			}
+			return m, nil
+		case "G", "end":
+			if m.vpReady {
+				m.vp.GotoBottom()
+				m.userScrolled = false
+			}
+			return m, nil
+		}
+		if m.onControl != nil {
+			switch msg.String() {
+			case "p", "P":
+				fn := m.onControl
+				return m, func() tea.Msg { fn(actionPause); return nil }
+			case "s", "S":
+				if m.stopKind == StopKindNone {
+					fn := m.onControl
+					return m, func() tea.Msg { fn(actionStopAfterCurrent); return nil }
+				}
+			case "q", "Q", "ctrl+c":
+				if m.stopKind != StopKindNow {
+					fn := m.onControl
+					return m, func() tea.Msg { fn(actionStopNow); return nil }
+				}
+			}
+		}
+		return m, nil
+
+	case msgControlState:
+		m.paused = msg.paused
+		m.stopKind = msg.stopping
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		if m.vpReady {
+		// Signal alt-screen is ready (first time only).
+		if m.onScreenReady != nil {
+			fn := m.onScreenReady
+			m.onScreenReady = nil
+			go fn()
+		}
+		if !m.vpReady {
+			m.vp = viewport.New(m.logViewportWidth(), m.logViewportHeight())
+			m.vp.SetContent(m.renderLogContent())
+			m.vp.GotoBottom()
+			m.vpReady = true
+			// Signal that the TUI is ready to receive messages.
+			if m.onReady != nil {
+				fn := m.onReady
+				m.onReady = nil // fire only once
+				return m, func() tea.Msg { fn(); return nil }
+			}
+		} else {
 			m.vp.Width = m.logViewportWidth()
 			m.vp.Height = m.logViewportHeight()
 			m.vp.SetContent(m.renderLogContent())
@@ -222,7 +419,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Also keep viewport content fresh.
 		if m.vpReady {
 			m.vp.SetContent(m.renderLogContent())
-			m.vp.GotoBottom()
+			if !m.userScrolled {
+				m.vp.GotoBottom()
+			}
 		}
 		return m, tickCmd()
 
@@ -243,6 +442,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.jobs = append(m.jobs, js)
 		m.jobIndex[msg.id] = js
+		if m.vpReady {
+			m.vp.Height = m.logViewportHeight()
+		}
 		return m, nil
 
 	case msgJobProgress:
@@ -268,8 +470,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
 		}
 		if m.vpReady {
+			m.vp.Height = m.logViewportHeight()
 			m.vp.SetContent(m.renderLogContent())
-			m.vp.GotoBottom()
+			if !m.userScrolled {
+				m.vp.GotoBottom()
+			}
 		}
 		return m, nil
 
@@ -280,20 +485,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.vpReady {
 			m.vp.SetContent(m.renderLogContent())
+			if !m.userScrolled {
+				m.vp.GotoBottom()
+			}
+		}
+		return m, nil
+
+	case msgShowSummary:
+		// Append a blank separator then all summary lines.
+		m.logLines = append(m.logLines, logLine{text: "", kind: kindSkipped})
+		for _, l := range msg.lines {
+			m.logLines = append(m.logLines, logLine{text: l, kind: kindSkipped})
+		}
+		if len(m.logLines) > maxLogLines {
+			m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
+		}
+		m.summaryReady = true
+		if m.vpReady {
+			m.vp.Height = m.logViewportHeight()
+			m.vp.SetContent(m.renderLogContent())
 			m.vp.GotoBottom()
+			m.userScrolled = false
 		}
 		return m, nil
 	}
 
-	// Forward to viewport
+	// Forward mouse and other events to viewport
 	var cmd tea.Cmd
+	prevOffset := m.vp.YOffset
 	m.vp, cmd = m.vp.Update(msg)
+	if m.vp.YOffset != prevOffset {
+		m.userScrolled = !m.vp.AtBottom()
+	}
 	return m, cmd
 }
 
 // ── View ──────────────────────────────────────────────────────────────────────
 
 func (m model) View() string {
+	if m.phase == phaseSetup {
+		return m.setup.view()
+	}
 	inner := m.renderInner()
 	// Wrap in rounded border, respecting terminal width
 	available := m.width - 2 // 2 for border
@@ -317,6 +549,9 @@ func (m model) renderInner() string {
 	titleLine := padBetween(title, timerStr, w)
 	b.WriteString(titleLine + "\n")
 
+	// ── Control status bar ──
+	b.WriteString(m.renderControlBar(w) + "\n")
+
 	// ── Active jobs ──
 	if len(m.jobs) > 0 {
 		b.WriteString("\n")
@@ -326,9 +561,15 @@ func (m model) renderInner() string {
 	}
 
 	// ── Log section ──
-	sep := m.renderSectionSep("Log", w)
+	var logLabel string
+	if m.userScrolled && m.vpReady {
+		pct := m.vp.ScrollPercent()
+		logLabel = fmt.Sprintf("Log  %d%%", int(pct*100))
+	} else {
+		logLabel = "Log"
+	}
+	sep := m.renderSectionSep(logLabel, w)
 	b.WriteString(sep + "\n")
-
 	// Viewport for scrolling log
 	if !m.vpReady {
 		// First time: initialize viewport
@@ -342,6 +583,31 @@ func (m model) renderInner() string {
 	}
 
 	return b.String()
+}
+
+// renderControlBar renders the one-line hint/status row just below the title.
+func (m model) renderControlBar(w int) string {
+	var status string
+	switch {
+	case m.summaryReady:
+		status = styleLogOK.Render("✓ Conversion complete — [Enter/q] Exit  ↑↓/PgUp/PgDn scroll")
+	case m.stopKind == StopKindNow:
+		status = styleLogErr.Render("⛔ Cancelling — waiting for FFmpeg to stop…")
+	case m.stopKind == StopKindAfterCurrent:
+		status = styleLogDiscard.Render("⏹  Finishing current files, then stopping…  [q] cancel now")
+	case m.paused:
+		status = styleTimer.Render("⏸  Paused — [p] resume  [s] finish current  [q] cancel now")
+	case m.userScrolled:
+		status = styleMuted.Render("[p] pause  [s] finish current  [q] cancel now  ↑↓/PgUp/PgDn scroll  [G] follow")
+	default:
+		status = styleMuted.Render("[p] pause  [s] finish current  [q] cancel now  ↑↓/PgUp/PgDn scroll")
+	}
+	// Pad/truncate to width
+	sw := lipgloss.Width(status)
+	if sw < w {
+		status += strings.Repeat(" ", w-sw)
+	}
+	return truncateANSI(status, w)
 }
 
 func (m model) renderJob(js *jobState, w int) string {
@@ -359,17 +625,20 @@ func (m model) renderJob(js *jobState, w int) string {
 	b.WriteString(row1 + "\n")
 
 	// Row 2: progress bar + pct + elapsed + eta
-	barWidth := w - 30 // reserve for pct/elapsed/eta
-	if barWidth < 10 {
-		barWidth = 10
-	}
-	bar := renderBar(js.pct, barWidth)
+	// Build the right-hand side first so we can measure its true rendered
+	// width and give the bar exactly the remaining columns.
 	pctStr := stylePct.Render(fmt.Sprintf("%d%%", js.pct))
 	elapsedStr := styleElapsed.Render("elapsed " + fmtDuration(js.elapsed()))
 	etaStr := styleETA.Render("ETA " + js.eta())
 	right := pctStr + "  " + elapsedStr + "  " + etaStr
-	row2 := bar + "  " + right
-	// Clamp to width
+	const sep = "  " // gap between bar and right side
+	barWidth := w - lipgloss.Width(right) - len(sep)
+	if barWidth < 10 {
+		barWidth = 10
+	}
+	bar := renderBar(js.pct, barWidth)
+	row2 := bar + sep + right
+	// Clamp to width (safety net for very narrow terminals)
 	row2 = truncateANSI(row2, w)
 	b.WriteString(row2 + "\n\n")
 
@@ -419,9 +688,12 @@ func (m model) innerWidth() int {
 }
 
 func (m model) logHeight() int {
-	// Active jobs each take 3 lines (name + bar + blank), plus title (1) + sep (1)
-	used := 2 + len(m.jobs)*3
-	h := m.height - 4 - used // 4 for border/padding
+	// title(1) + controlBar(1) + sep(1) + blank before jobs(1 if any) + jobs*3 + border/padding(4)
+	used := 3 + len(m.jobs)*3
+	if len(m.jobs) > 0 {
+		used++ // blank line before first job
+	}
+	h := m.height - 4 - used
 	if h < 3 {
 		h = 3
 	}
@@ -491,11 +763,21 @@ func truncate(s string, maxLen int) string {
 	return string(runes[:maxLen-3]) + "..."
 }
 
-// truncateANSI is a best-effort truncation of an ANSI-styled string.
-// We pass it through as-is; the bar renderer ensures the bar width is already
-// bounded, so lines won't exceed the terminal width in practice.
-func truncateANSI(s string, _ int) string {
-	return s
+// truncateANSI truncates an ANSI-styled string to at most maxLen visible
+// columns. Iterates from the tail since ANSI escape sequences make byte-length
+// unreliable; lipgloss.Width gives the true visible column count.
+func truncateANSI(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxLen {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 && lipgloss.Width(string(runes)) > maxLen {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes)
 }
 
 // ── UI (thread-safe façade) ───────────────────────────────────────────────────
@@ -516,24 +798,94 @@ type UI struct {
 // New creates and starts a Bubble Tea UI writing to stdout.
 // When stdout is not a TTY (e.g. redirected to a file), the TUI is skipped
 // and a plain-text fallback is used instead.
+//
+// opts describes which setup questions to ask before conversion begins.
+// The returned channel receives exactly one SetupAnswers value (then closes)
+// when the user finishes the setup phase.  If setup is entirely skipped (all
+// flags pre-filled), the channel is closed immediately with zero-value answers.
+//
+// onControl is called (from the Bubble Tea goroutine) when the user presses
+// p/s/q during conversion. It must be non-blocking. Pass nil to disable key handling.
+//
 // Call [UI.Wait] (or defer it) to block until the program exits.
-func New() *UI {
+func New(opts SetupOptions, onControl func(action ControlAction)) (*UI, <-chan SetupAnswers) {
+	answersCh := make(chan SetupAnswers, 1)
+
 	// If stdout is not a terminal, skip Bubble Tea entirely — it requires a TTY.
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		return &UI{plain: true, plainW: os.Stdout, logW: &tuiWriter{plain: true, plainW: os.Stdout}}
+		// Deliver zero-value answers so callers don't block.
+		go func() {
+			answersCh <- SetupAnswers{Cancelled: true}
+			close(answersCh)
+		}()
+		return &UI{plain: true, plainW: os.Stdout, logW: &tuiWriter{plain: true, plainW: os.Stdout}}, answersCh
 	}
 
-	m := initialModel()
+	// screenReady is closed as soon as the alt-screen gets its first
+	// WindowSizeMsg.  convertReady is closed when the converting phase is
+	// initialised (may be much later when setup phase is active).
+	screenReady := make(chan struct{})
+	convertReady := make(chan struct{})
+
+	m := initialModel(opts, answersCh)
+	m.onReady = func() {
+		select {
+		case <-convertReady:
+		default:
+			close(convertReady)
+		}
+	}
+	m.onScreenReady = func() {
+		select {
+		case <-screenReady:
+		default:
+			close(screenReady)
+		}
+	}
+	if onControl != nil {
+		m.onControl = func(a controlAction) { onControl(ControlAction(a)) }
+	}
 	prog := tea.NewProgram(m,
-		tea.WithAltScreen(),       // use alternate screen buffer
-		tea.WithMouseCellMotion(), // optional: allow scroll
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
 	)
 	w := &tuiWriter{prog: prog}
 	u := &UI{prog: prog, logW: w}
 	go func() { prog.Run() }() //nolint:errcheck
-	// Give bubbletea a moment to start and claim the screen
-	time.Sleep(50 * time.Millisecond)
-	return u
+
+	// Wait for the alt-screen to be ready (first WindowSizeMsg).
+	// When setup is active the caller then waits on answersCh independently;
+	// when setup is skipped we additionally wait for convertReady.
+	select {
+	case <-screenReady:
+	case <-time.After(2 * time.Second):
+	}
+	if m.phase == phaseConverting {
+		// No setup — also wait for the viewport to initialise.
+		select {
+		case <-convertReady:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return u, answersCh
+}
+
+// ControlAction mirrors the internal controlAction for external callers.
+type ControlAction int
+
+const (
+	ActionPause            ControlAction = ControlAction(actionPause)
+	ActionStopAfterCurrent ControlAction = ControlAction(actionStopAfterCurrent)
+	ActionStopNow          ControlAction = ControlAction(actionStopNow)
+)
+
+// SendControlState pushes updated pause/stop state into the TUI so the
+// status bar reflects the current reality.
+func (u *UI) SendControlState(paused bool, stopping StopKind) {
+	if u.plain {
+		return
+	}
+	u.prog.Send(msgControlState{paused: paused, stopping: stopping})
 }
 
 // Wait shuts down the Bubble Tea program and waits for it to finish.
@@ -545,6 +897,28 @@ func (u *UI) Wait() {
 	u.prog.Quit()
 	// small grace period so the final frame is flushed
 	time.Sleep(100 * time.Millisecond)
+}
+
+// ShowSummary appends the summary lines to the TUI log viewport, switches the
+// control bar to "press Enter to exit" mode, and blocks until the user quits
+// (Enter / q / ctrl+c) or the program exits for any other reason.
+//
+// Call this instead of Wait() when you want the user to read the summary before
+// the alt-screen is torn down.  After ShowSummary returns the alt-screen has
+// been restored and it is safe to print to stdout normally.
+func (u *UI) ShowSummary(lines []string) {
+	if u.plain {
+		// Plain mode: just print the lines directly.
+		for _, l := range lines {
+			fmt.Fprintln(u.plainW, l)
+		}
+		return
+	}
+	u.prog.Send(msgShowSummary{lines: lines})
+	// prog.Run() returns when the program quits (user pressed Enter/q or
+	// tea.Quit was sent).  We already launched it in a goroutine in New(), so
+	// we just wait for that goroutine via the program's built-in wait.
+	u.prog.Wait()
 }
 
 // StartTimer signals that work has begun — starts the global elapsed timer.

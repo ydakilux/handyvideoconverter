@@ -147,9 +147,24 @@ func trialEncode(ffmpegPath string, encoder string, logger *logrus.Logger) GPUIn
 
 	output, err := cmd.CombinedOutput()
 	elapsed := time.Since(start).Milliseconds()
+	outputStr := string(output)
+	lowerOut := strings.ToLower(outputStr)
 
-	if err != nil {
-		logger.Debugf("Trial encode failed for %s (%dms): %v — %s", encoder, elapsed, err, string(output))
+	// Treat as failure if the process exited non-zero OR if the output
+	// contains known FFmpeg error indicators (handles wrappers like WSL
+	// batch scripts that swallow non-zero exit codes).
+	encodeError := err != nil ||
+		strings.Contains(lowerOut, "unknown encoder") ||
+		strings.Contains(lowerOut, "encoder not found") ||
+		strings.Contains(lowerOut, "error selecting an encoder") ||
+		strings.Contains(lowerOut, "no such encoder") ||
+		// NVENC driver version mismatch (driver too old for this FFmpeg build)
+		strings.Contains(lowerOut, "does not support the required nvenc api version") ||
+		strings.Contains(lowerOut, "minimum required nvidia driver") ||
+		strings.Contains(lowerOut, "error while opening encoder")
+
+	if encodeError {
+		logger.Debugf("Trial encode failed for %s (%dms): %v — %s", encoder, elapsed, err, outputStr)
 		return info
 	}
 

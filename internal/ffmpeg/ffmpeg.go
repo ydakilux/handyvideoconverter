@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -16,46 +17,57 @@ import (
 	"video-converter/internal/types"
 )
 
-func BuildArgs(inputPath, outputPath, quality, outputExt, encoder string) []string {
-	args := []string{
-		"-hide_banner", "-y", "-nostats",
-		"-progress", "pipe:1",
-		"-i", inputPath,
-		"-c:v", encoder,
+// ntdll procedures for process suspend/resume on Windows.
+var (
+	ntdll             = syscall.NewLazyDLL("ntdll.dll")
+	procNtSuspendProc = ntdll.NewProc("NtSuspendProcess")
+	procNtResumeProc  = ntdll.NewProc("NtResumeProcess")
+)
+
+const processAllAccess = 0x1F0FFF
+
+// suspendProcess suspends all threads of a running process (Windows-only).
+func suspendProcess(pid int) {
+	handle, err := syscall.OpenProcess(processAllAccess, false, uint32(pid))
+	if err != nil {
+		return
 	}
+	defer syscall.CloseHandle(handle)
+	procNtSuspendProc.Call(uintptr(handle)) //nolint:errcheck
+}
 
-	if encoder == "libx265" {
-		args = append(args, "-crf", quality, "-preset", "medium")
-	} else if strings.Contains(encoder, "_nvenc") {
-		args = append(args, "-cq", quality, "-preset", "p5")
-	} else {
-		args = append(args, "-crf", quality)
+// resumeProcess resumes a previously suspended process (Windows-only).
+func resumeProcess(pid int) {
+	handle, err := syscall.OpenProcess(processAllAccess, false, uint32(pid))
+	if err != nil {
+		return
 	}
+	defer syscall.CloseHandle(handle)
+	procNtResumeProc.Call(uintptr(handle)) //nolint:errcheck
+}
 
-	if outputExt == ".mkv" {
-		args = append(args,
-			"-c:a", "copy",
-			"-c:s", "copy",
-			"-map", "0",
-			"-map_metadata", "0",
-			"-map_chapters", "0",
-		)
-	} else {
-		args = append(args,
-			"-c:a", "aac",
-			"-movflags", "+faststart",
-		)
+// MakeSuspendFn returns a suspend/resume callback for the given *exec.Cmd.
+// Pass true to suspend, false to resume. Safe to call before the process starts
+// (it checks cmd.Process for nil).
+func MakeSuspendFn(cmd *exec.Cmd) func(suspend bool) {
+	return func(suspend bool) {
+		if cmd.Process == nil {
+			return
+		}
+		if suspend {
+			suspendProcess(cmd.Process.Pid)
+		} else {
+			resumeProcess(cmd.Process.Pid)
+		}
 	}
-
-	args = append(args, outputPath)
-
-	return args
 }
 
 // Run executes FFmpeg with the given args. onProgress is called with the
 // percentage (0-100) each time it changes; pass nil to disable callbacks.
-func Run(ffmpegExe string, args []string, filePath string, totalDuration float64, logger *logrus.Logger, onProgress func(pct int)) (int, string) {
-	cmd := exec.Command(ffmpegExe, args...)
+// registerSuspend, if non-nil, is called with a suspend/resume function once
+// the process starts — the caller should unregister it when Run returns.
+func Run(ctx context.Context, ffmpegExe string, args []string, filePath string, totalDuration float64, logger *logrus.Logger, onProgress func(pct int), registerSuspend func(fn func(suspend bool)) (unregister func())) (int, string) {
+	cmd := exec.CommandContext(ctx, ffmpegExe, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -72,6 +84,12 @@ func Run(ffmpegExe string, args []string, filePath string, totalDuration float64
 	if err := cmd.Start(); err != nil {
 		logger.Errorf("Failed to start FFmpeg: %v", err)
 		return 999, ""
+	}
+
+	// Register suspend/resume callback now that the process is running.
+	if registerSuspend != nil {
+		unregister := registerSuspend(MakeSuspendFn(cmd))
+		defer unregister()
 	}
 
 	var stderrBuf bytes.Buffer
@@ -175,6 +193,9 @@ func GetDuration(filePath, ffprobeExe string, logger *logrus.Logger) float64 {
 	return duration
 }
 
+// GetMediaInfo probes all streams (video, audio, subtitle) in a file and
+// returns a VideoInfo struct populated with codec, geometry, HDR colour
+// metadata, and per-stream audio/subtitle details.
 func GetMediaInfo(filePath, ffprobeExe string) (*types.VideoInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -182,39 +203,74 @@ func GetMediaInfo(filePath, ffprobeExe string) (*types.VideoInfo, error) {
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams",
-		"-select_streams", "v:0",
 		filePath,
 	)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
+
 	var result struct {
 		Streams []struct {
-			CodecName string `json:"codec_name"`
-			CodecTag  string `json:"codec_tag_string"`
-			Width     int    `json:"width"`
-			Height    int    `json:"height"`
+			CodecType      string `json:"codec_type"`
+			CodecName      string `json:"codec_name"`
+			CodecTag       string `json:"codec_tag_string"`
+			Width          int    `json:"width"`
+			Height         int    `json:"height"`
+			ColorPrimaries string `json:"color_primaries"`
+			ColorTransfer  string `json:"color_transfer"`
+			ColorSpace     string `json:"color_space"`
+			Channels       int    `json:"channels"`
 		} `json:"streams"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
 		return nil, err
 	}
 
-	if len(result.Streams) == 0 {
-		return nil, fmt.Errorf("no video stream found")
+	info := &types.VideoInfo{}
+	videoFound := false
+
+	for _, s := range result.Streams {
+		switch s.CodecType {
+		case "video":
+			if !videoFound {
+				info.Format = s.CodecName
+				info.CodecID = s.CodecTag
+				info.Width = s.Width
+				info.Height = s.Height
+				info.Color = types.ColorInfo{
+					ColorPrimaries: s.ColorPrimaries,
+					ColorTransfer:  s.ColorTransfer,
+					ColorSpace:     s.ColorSpace,
+				}
+				videoFound = true
+			}
+		case "audio":
+			info.AudioStreams = append(info.AudioStreams, types.AudioStream{
+				CodecName: s.CodecName,
+				Channels:  s.Channels,
+			})
+		case "subtitle":
+			info.SubtitleStreams = append(info.SubtitleStreams, types.SubtitleStream{
+				CodecName: s.CodecName,
+			})
+		}
 	}
 
-	s := result.Streams[0]
-	return &types.VideoInfo{
-		Format:  s.CodecName,
-		CodecID: s.CodecTag,
-		Width:   s.Width,
-		Height:  s.Height,
-	}, nil
+	if !videoFound {
+		return nil, fmt.Errorf("no video stream found")
+	}
+	return info, nil
 }
 
+// IsHEVC reports whether the given codec name or tag identifies an HEVC/H.265
+// stream. Recognises codec_name "hevc", the common MP4 tag "hvc1", and any
+// string that contains "HEVC" or "HVC1" (case-insensitive).
 func IsHEVC(format, codecID string) bool {
-	return strings.Contains(strings.ToUpper(format), "HEVC") ||
-		strings.Contains(strings.ToUpper(codecID), "HVC1")
+	fUpper := strings.ToUpper(format)
+	cUpper := strings.ToUpper(codecID)
+	return fUpper == "HEVC" ||
+		strings.Contains(fUpper, "HEVC") ||
+		cUpper == "HVC1" ||
+		strings.Contains(cUpper, "HVC1")
 }

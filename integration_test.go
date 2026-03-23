@@ -16,7 +16,6 @@ import (
 	"video-converter/internal/fallback"
 	"video-converter/internal/gpu/benchmark"
 	"video-converter/internal/gpu/detect"
-
 )
 
 // mockGPUEncoder implements encoder.Encoder for testing FallbackManager.
@@ -245,9 +244,6 @@ func TestIntegrationConfigBackwardCompat(t *testing.T) {
 	if cfg.MaxEncodesPerGPU != 0 {
 		t.Errorf("MaxEncodesPerGPU = %d before ApplyGPUDefaults, want 0", cfg.MaxEncodesPerGPU)
 	}
-	if cfg.BenchmarkCache != nil {
-		t.Errorf("BenchmarkCache should be nil for old config, got %v", cfg.BenchmarkCache)
-	}
 	if cfg.NonInteractive {
 		t.Error("NonInteractive should be false for old config")
 	}
@@ -372,8 +368,7 @@ func TestIntegrationBenchmarkCacheRoundTrip(t *testing.T) {
 		t.Error("IsCacheValid should return false for unknown key")
 	}
 
-	// Verify other config keys are preserved (the {} we started with should
-	// only contain benchmark_cache now)
+	// Verify the config file was NOT modified (cache is now in a separate file)
 	rawData, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("Failed to read config file: %v", err)
@@ -382,8 +377,14 @@ func TestIntegrationBenchmarkCacheRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(rawData, &raw); err != nil {
 		t.Fatalf("Failed to parse config: %v", err)
 	}
-	if _, ok := raw["benchmark_cache"]; !ok {
-		t.Error("Config file should contain benchmark_cache key")
+	if _, hasBench := raw["benchmark_cache"]; hasBench {
+		t.Error("Config file must NOT contain benchmark_cache key after migration to separate file")
+	}
+
+	// Verify the cache file exists beside the config
+	cachePath := benchmark.CachePath(configPath)
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Errorf("benchmark_cache.json not found: %v", err)
 	}
 
 	t.Logf("Benchmark cache round-trip succeeded for key %s", key[:16]+"...")
@@ -411,7 +412,6 @@ func TestIntegrationFallbackManagerNonGPUError(t *testing.T) {
 
 	t.Log("FallbackManager correctly ignored non-GPU error")
 }
-
 
 // --- Test 8: detect.PriorityOrder and SelectBest with mixed availability ---
 

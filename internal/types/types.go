@@ -1,7 +1,6 @@
 package types
 
 import (
-	"encoding/json"
 	"sync"
 )
 
@@ -24,11 +23,10 @@ type Config struct {
 	FileExtensions     []string `json:"file_extensions"`
 	LogLevel           string   `json:"log_level"`
 	// GPU-related fields
-	BenchmarkCache   json.RawMessage `json:"benchmark_cache,omitempty"`
-	MaxEncodesPerGPU int             `json:"max_encodes_per_gpu,omitempty"`
-	NonInteractive   bool            `json:"non_interactive,omitempty"`
-	GPUPreset        string          `json:"gpu_preset,omitempty"`
-	Rebenchmark      bool            `json:"-"` // runtime-only, NOT persisted
+	MaxEncodesPerGPU int    `json:"max_encodes_per_gpu,omitempty"`
+	NonInteractive   bool   `json:"-"` // runtime-only, NOT persisted
+	GPUPreset        string `json:"gpu_preset,omitempty"`
+	Rebenchmark      bool   `json:"-"` // runtime-only, NOT persisted
 	// Parallelism
 	MaxParallelJobs int `json:"max_parallel_jobs,omitempty"`
 }
@@ -54,11 +52,12 @@ type Job struct {
 	Format          string
 	CodecID         string
 	DurationSeconds float64
-	FileNumber      int // Current file number
-	TotalFiles      int // Total files to process
-	FolderNumber    int // Current folder number
-	TotalFolders    int // Total folders
-	GPUIndex        int // GPU index for multi-GPU encoding
+	FileNumber      int        // Current file number
+	TotalFiles      int        // Total files to process
+	FolderNumber    int        // Current folder number
+	TotalFolders    int        // Total folders
+	GPUIndex        int        // GPU index for multi-GPU encoding
+	VideoInfo       *VideoInfo // Full stream info for smart codec decisions (may be nil)
 }
 
 // Stats tracks conversion statistics
@@ -75,10 +74,75 @@ type Stats struct {
 	TouchedDrives  map[string]bool
 }
 
+// IncrFilesAnalyzed safely increments FilesAnalyzed by 1.
+func (s *Stats) IncrFilesAnalyzed() {
+	s.Mu.Lock()
+	s.FilesAnalyzed++
+	s.Mu.Unlock()
+}
+
+// IncrFilesSkipped safely increments FilesSkipped by 1.
+func (s *Stats) IncrFilesSkipped() {
+	s.Mu.Lock()
+	s.FilesSkipped++
+	s.Mu.Unlock()
+}
+
+// IncrFilesErrored safely increments FilesErrored by 1.
+func (s *Stats) IncrFilesErrored() {
+	s.Mu.Lock()
+	s.FilesErrored++
+	s.Mu.Unlock()
+}
+
+// AddConverted records a completed conversion outcome.
+// improved=true means the output was smaller than the input (kept);
+// false means it was discarded.
+func (s *Stats) AddConverted(improved bool, origBytes, finalBytes int64) {
+	s.Mu.Lock()
+	s.FilesProcessed++
+	if improved {
+		s.FilesImproved++
+	} else {
+		s.FilesDiscarded++
+	}
+	s.OriginalBytes += origBytes
+	s.FinalBytes += finalBytes
+	s.Mu.Unlock()
+}
+
+// AddTouchedDrive records that a drive root has been written to.
+func (s *Stats) AddTouchedDrive(driveRoot string) {
+	s.Mu.Lock()
+	s.TouchedDrives[driveRoot] = true
+	s.Mu.Unlock()
+}
+
+// AudioStream holds information about a single audio stream in a video file.
+type AudioStream struct {
+	CodecName string
+	Channels  int
+}
+
+// SubtitleStream holds information about a single subtitle stream in a video file.
+type SubtitleStream struct {
+	CodecName string
+}
+
+// ColorInfo holds HDR/colour-space metadata from the primary video stream.
+type ColorInfo struct {
+	ColorPrimaries string // e.g. "bt2020", "bt709"
+	ColorTransfer  string // e.g. "smpte2084", "arib-std-b67", "bt709"
+	ColorSpace     string // e.g. "bt2020nc", "bt709"
+}
+
 // VideoInfo holds media information about a video file
 type VideoInfo struct {
-	Format  string
-	Width   int
-	Height  int
-	CodecID string
+	Format          string
+	Width           int
+	Height          int
+	CodecID         string
+	Color           ColorInfo
+	AudioStreams    []AudioStream
+	SubtitleStreams []SubtitleStream
 }

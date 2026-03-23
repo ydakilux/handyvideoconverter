@@ -1,6 +1,15 @@
 package encoder
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
+
+var libx265CRFTable = qualityTable{
+	{19, 20, 21, 23}, // high_quality
+	{23, 25, 27, 30}, // balanced
+	{26, 28, 30, 33}, // space_saver
+}
 
 // Libx265Encoder implements Encoder for the libx265 (CPU) codec.
 type Libx265Encoder struct{}
@@ -15,9 +24,8 @@ func (e *Libx265Encoder) Name() string {
 }
 
 func (e *Libx265Encoder) QualityArgs(preset string, width int) []string {
-	crf := libx265CRF(preset, width)
-	x265Preset := libx265Preset(preset)
-	return []string{"-crf", crf, "-preset", x265Preset}
+	crf := strconv.Itoa(qualityValue(preset, width, libx265CRFTable))
+	return []string{"-crf", crf, "-preset", libx265Preset(preset)}
 }
 
 func (e *Libx265Encoder) DeviceArgs(gpuIndex int) []string {
@@ -30,40 +38,6 @@ func (e *Libx265Encoder) IsAvailable(ffmpegPath string) bool {
 
 func (e *Libx265Encoder) ParseError(stderr string) (bool, string) {
 	return false, ""
-}
-
-func libx265CRF(preset string, width int) string {
-	switch strings.ToLower(preset) {
-	case "high_quality":
-		if width <= 1024 {
-			return "19"
-		} else if width <= 1280 {
-			return "20"
-		} else if width <= 1920 {
-			return "21"
-		}
-		return "23"
-
-	case "space_saver":
-		if width <= 1024 {
-			return "26"
-		} else if width <= 1280 {
-			return "28"
-		} else if width <= 1920 {
-			return "30"
-		}
-		return "33"
-
-	default: // "balanced" and any unknown preset
-		if width <= 1024 {
-			return "23"
-		} else if width <= 1280 {
-			return "25"
-		} else if width <= 1920 {
-			return "27"
-		}
-		return "30"
-	}
 }
 
 func libx265Preset(preset string) string {

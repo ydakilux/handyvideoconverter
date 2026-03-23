@@ -11,7 +11,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-
 type mockEncoder struct {
 	isGPU bool
 	msg   string
@@ -25,13 +24,11 @@ func (m *mockEncoder) ParseError(stderr string) (bool, string) {
 	return m.isGPU, m.msg
 }
 
-
 type mockJob struct {
 	name string
 }
 
 func (j *mockJob) String() string { return j.name }
-
 
 var _ encoder.Encoder = (*mockEncoder)(nil)
 

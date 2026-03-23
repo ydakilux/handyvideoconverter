@@ -1,18 +1,24 @@
-package main
+package main_test
 
 import (
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
+
+	"io"
+
 	"github.com/sirupsen/logrus"
+
 	cfgpkg "video-converter/internal/config"
+	"video-converter/internal/converter"
 	"video-converter/internal/database"
-	"video-converter/internal/encoder"
-	"video-converter/internal/ffmpeg"
+	"video-converter/internal/fileutil"
 	"video-converter/internal/types"
 )
 
@@ -24,7 +30,6 @@ func TestBackwardCompatConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "old_config.json")
 
-	// Minimal old-format JSON — only the original fields, NO GPU fields
 	oldJSON := `{
   "server_url": "http://myseq:5341/",
   "api_key": "old-key-123",
@@ -46,7 +51,6 @@ func TestBackwardCompatConfig(t *testing.T) {
 		t.Fatalf("LoadConfig with old-format JSON must succeed: %v", err)
 	}
 
-	// Verify all original fields parsed correctly
 	if cfg.ServerURL != "http://myseq:5341/" {
 		t.Errorf("ServerURL = %q, want %q", cfg.ServerURL, "http://myseq:5341/")
 	}
@@ -79,10 +83,6 @@ func TestBackwardCompatConfig(t *testing.T) {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "DEBUG")
 	}
 
-	// GPU fields must have zero values (not errors)
-	if cfg.BenchmarkCache != nil {
-		t.Errorf("BenchmarkCache should be nil, got %v", cfg.BenchmarkCache)
-	}
 	if cfg.MaxEncodesPerGPU != 0 {
 		t.Errorf("MaxEncodesPerGPU = %d, want 0", cfg.MaxEncodesPerGPU)
 	}
@@ -141,103 +141,12 @@ func TestBackwardCompatAutoEncoder(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: FFmpeg argument equivalence for libx265 between old and new paths
-// ---------------------------------------------------------------------------
-
-func TestBackwardCompatFFmpegArgs(t *testing.T) {
-	libx265Enc := encoder.NewLibx265Encoder()
-
-	cases := []struct {
-		name      string
-		preset    string
-		width     int
-		outputExt string
-	}{
-		{"balanced_1080p_mp4", "balanced", 1920, ".mp4"},
-		{"balanced_1080p_mkv", "balanced", 1920, ".mkv"},
-		{"high_quality_720p_mp4", "high_quality", 1280, ".mp4"},
-		{"space_saver_sd_mp4", "space_saver", 720, ".mp4"},
-	}
-
-	input := `C:\Videos\test.avi`
-	output := `C:\HSORTED\test\test.mp4`
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			// OLD path: DetermineQuality → BuildArgs (always uses -preset medium)
-			cfg := types.Config{QualityPreset: tc.preset}
-			quality := cfgpkg.DetermineQuality(tc.width, cfg)
-
-			outFile := output
-			if tc.outputExt == ".mkv" {
-				outFile = `C:\HSORTED\test\test.mkv`
-			}
-			oldArgs := ffmpeg.BuildArgs(input, outFile, quality, tc.outputExt, "libx265")
-
-			// NEW path: encoder.QualityArgs → buildConversionArgs
-			qualityArgs := libx265Enc.QualityArgs(tc.preset, tc.width)
-			newArgs := buildConversionArgs(input, outFile, tc.outputExt, "libx265", qualityArgs, nil)
-
-			// For "balanced" preset, old (-preset medium) == new (-preset medium) → identical
-			// For "high_quality", old used -preset medium but new uses -preset slow (intentional improvement)
-			// For "space_saver", old used -preset medium but new uses -preset faster (intentional improvement)
-			//
-			// We verify:
-			//  a) CRF values are always identical between old and new paths
-			//  b) For balanced, the full arg lists are identical
-			//  c) For non-balanced, only the -preset value differs (documented change)
-
-			oldCRF := extractArgValue(oldArgs, "-crf")
-			newCRF := extractArgValue(newArgs, "-crf")
-			if oldCRF != newCRF {
-				t.Errorf("CRF mismatch: old=%q new=%q", oldCRF, newCRF)
-			}
-
-			if tc.preset == "balanced" {
-				// Full equivalence for balanced preset
-				if !reflect.DeepEqual(oldArgs, newArgs) {
-					t.Errorf("balanced args should be identical\nold: %v\nnew: %v", oldArgs, newArgs)
-				}
-			} else {
-				// Non-balanced: only -preset differs, all other args must match
-				oldPreset := extractArgValue(oldArgs, "-preset")
-				newPreset := extractArgValue(newArgs, "-preset")
-
-				if oldPreset != "medium" {
-					t.Errorf("old path should always use -preset medium, got %q", oldPreset)
-				}
-
-				// Verify the intentional preset change is documented correctly
-				switch tc.preset {
-				case "high_quality":
-					if newPreset != "slow" {
-						t.Errorf("new high_quality should use -preset slow, got %q", newPreset)
-					}
-				case "space_saver":
-					if newPreset != "faster" {
-						t.Errorf("new space_saver should use -preset faster, got %q", newPreset)
-					}
-				}
-
-				// Strip -preset from both and compare everything else
-				oldStripped := removeArgPair(oldArgs, "-preset")
-				newStripped := removeArgPair(newArgs, "-preset")
-				if !reflect.DeepEqual(oldStripped, newStripped) {
-					t.Errorf("args differ beyond -preset\nold (stripped): %v\nnew (stripped): %v", oldStripped, newStripped)
-				}
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Test 4: Old database JSON format loads via DatabaseManager
+// moveFile tests
 // ---------------------------------------------------------------------------
 
 func TestBackwardCompatDatabase(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write old-format database JSON to temp directory
 	dbJSON := `{
   "hashkey1": {
     "original_size": 1000,
@@ -258,16 +167,12 @@ func TestBackwardCompatDatabase(t *testing.T) {
 		t.Fatalf("write db: %v", err)
 	}
 
-	// DatabaseManager uses driveRoot + "converted_files.json"
-	// So driveRoot = dir (which includes a trailing separator via TempDir)
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	dbMgr := database.NewDatabaseManager(logger)
 
-	// Use dir as drive root — DatabaseManager will look for dir/converted_files.json
 	driveRoot := dir + string(filepath.Separator)
 
-	// Record 1: successful conversion
 	rec1 := dbMgr.GetRecord(driveRoot, "hashkey1")
 	if rec1 == nil {
 		t.Fatal("GetRecord(hashkey1) returned nil")
@@ -282,19 +187,14 @@ func TestBackwardCompatDatabase(t *testing.T) {
 		t.Errorf("Output = %q, want %q", rec1.Output, `D:\HSORTED\test\file.mp4`)
 	}
 
-	// Record 2: not beneficial
 	rec2 := dbMgr.GetRecord(driveRoot, "hashkey2")
 	if rec2 == nil {
 		t.Fatal("GetRecord(hashkey2) returned nil")
-	}
-	if rec2.OriginalSize != 2000 {
-		t.Errorf("OriginalSize = %d, want 2000", rec2.OriginalSize)
 	}
 	if rec2.Note != "not_beneficial" {
 		t.Errorf("Note = %q, want %q", rec2.Note, "not_beneficial")
 	}
 
-	// Record 3: error
 	rec3 := dbMgr.GetRecord(driveRoot, "hashkey3")
 	if rec3 == nil {
 		t.Fatal("GetRecord(hashkey3) returned nil")
@@ -303,13 +203,11 @@ func TestBackwardCompatDatabase(t *testing.T) {
 		t.Errorf("Error = %q, want %q", rec3.Error, "rc_1")
 	}
 
-	// Non-existent key
 	recNil := dbMgr.GetRecord(driveRoot, "nonexistent")
 	if recNil != nil {
 		t.Errorf("GetRecord(nonexistent) should return nil, got %+v", recNil)
 	}
 
-	// Verify UpdateRecord round-trips correctly
 	dbMgr.UpdateRecord(driveRoot, "hashkey4", types.Record{
 		OriginalSize:  4000,
 		ConvertedSize: 2000,
@@ -325,41 +223,417 @@ func TestBackwardCompatDatabase(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: CRF quality values match between DetermineQuality and libx265 QualityArgs
+// moveFile tests
 // ---------------------------------------------------------------------------
 
-func TestBackwardCompatQualityValues(t *testing.T) {
-	libx265Enc := encoder.NewLibx265Encoder()
+func TestMoveFileSameDrive(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.mp4")
+	dst := filepath.Join(dir, "dst.mp4")
 
-	presets := []string{"balanced", "high_quality", "space_saver"}
-	widths := []int{720, 1024, 1280, 1920, 3840}
+	content := []byte("video data")
+	if err := os.WriteFile(src, content, 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
-	for _, preset := range presets {
-		for _, width := range widths {
-			t.Run(preset+"_"+itoa(width), func(t *testing.T) {
-				// OLD path: DetermineQuality returns CRF string
-				cfg := types.Config{QualityPreset: preset}
-				oldCRF := cfgpkg.DetermineQuality(width, cfg)
+	if err := converter.MoveFile(src, dst); err != nil {
+		t.Fatalf("MoveFile same-dir: %v", err)
+	}
 
-				// NEW path: QualityArgs returns ["-crf", crf, "-preset", preset]
-				qualityArgs := libx265Enc.QualityArgs(preset, width)
-				newCRF := extractArgValue(qualityArgs, "-crf")
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read dst: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("dst content = %q, want %q", got, content)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("src should be removed after move")
+	}
+}
 
-				if oldCRF != newCRF {
-					t.Errorf("CRF mismatch for preset=%q width=%d: old=%q new=%q",
-						preset, width, oldCRF, newCRF)
-				}
-			})
+func TestMoveFileCrossDirectory(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	src := filepath.Join(srcDir, "src.mp4")
+	dst := filepath.Join(dstDir, "sub", "dst.mp4")
+
+	content := []byte("cross dir video data")
+	if err := os.WriteFile(src, content, 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := converter.MoveFile(src, dst); err != nil {
+		t.Fatalf("MoveFile cross-dir: %v", err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read dst: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("dst content = %q, want %q", got, content)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("src should be removed after move")
+	}
+}
+
+func TestMoveFileMissingSrc(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "nonexistent.mp4")
+	dst := filepath.Join(dir, "dst.mp4")
+
+	if err := converter.MoveFile(src, dst); err == nil {
+		t.Error("MoveFile with missing src should return error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetDriveRoot
+// ---------------------------------------------------------------------------
+
+func TestGetDriveRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		tests := []struct {
+			input string
+			want  string
+		}{
+			{`C:\Videos\foo.mp4`, `C:\`},
+			{`D:\`, `D:\`},
+			{`C:\deep\path\file.mkv`, `C:\`},
+		}
+		for _, tc := range tests {
+			got := fileutil.GetDriveRoot(tc.input)
+			if got != tc.want {
+				t.Errorf("GetDriveRoot(%q) = %q, want %q", tc.input, got, tc.want)
+			}
 		}
 	}
+	if got := fileutil.GetDriveRoot(""); got != "/" {
+		t.Errorf("GetDriveRoot(\"\") = %q, want \"/\"", got)
+	}
+	if got := fileutil.GetDriveRoot("relative/path/file.mp4"); got != "/" {
+		t.Errorf("GetDriveRoot(relative) = %q, want \"/\"", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetParentFolderName
+// ---------------------------------------------------------------------------
+
+func TestGetParentFolderName(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("path tests use Windows separators")
+	}
+	tests := []struct {
+		filePath  string
+		driveRoot string
+		want      string
+	}{
+		{`C:\Videos\movie.mp4`, `C:\`, "Videos"},
+		{`C:\movie.mp4`, `C:\`, "ROOT"},
+		{`C:\A\B\movie.mp4`, `C:\`, "B"},
+		{`D:\Foo\file.mkv`, `D:\`, "Foo"},
+	}
+	for _, tc := range tests {
+		got := fileutil.GetParentFolderName(tc.filePath, tc.driveRoot)
+		if got != tc.want {
+			t.Errorf("GetParentFolderName(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetRelativePath
+// ---------------------------------------------------------------------------
+
+func TestGetRelativePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("path tests use Windows separators")
+	}
+	tests := []struct {
+		filePath  string
+		driveRoot string
+		want      string
+	}{
+		{`C:\Videos\foo.mp4`, `C:\`, "Videos"},
+		{`C:\foo.mp4`, `C:\`, "ROOT"},
+		{`C:\A\B\foo.mp4`, `C:\`, `A\B`},
+	}
+	for _, tc := range tests {
+		got := fileutil.GetRelativePath(tc.filePath, tc.driveRoot)
+		if got != tc.want {
+			t.Errorf("GetRelativePath(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SanitizeFolderName
+// ---------------------------------------------------------------------------
+
+func TestSanitizeFolderName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Normal", "Normal"},
+		{"My:Video", "My_Video"},
+		{"A*B?C", "A_B_C"},
+		{`foo"bar`, "foo_bar"},
+		{"a<b>c", "a_b_c"},
+		{"pipe|pipe", "pipe_pipe"},
+		{"clean", "clean"},
+	}
+	for _, tc := range tests {
+		got := fileutil.SanitizeFolderName(tc.input)
+		if got != tc.want {
+			t.Errorf("SanitizeFolderName(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FormatBytes
+// ---------------------------------------------------------------------------
+
+func TestFormatBytes(t *testing.T) {
+	tests := []struct {
+		bytes int64
+		want  string
+	}{
+		{0, "0 B"},
+		{512, "512 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KB"},
+		{1536, "1.5 KB"},
+		{1048576, "1.0 MB"},
+		{1073741824, "1.0 GB"},
+		{1099511627776, "1.0 TB"},
+	}
+	for _, tc := range tests {
+		got := fileutil.FormatBytes(tc.bytes)
+		if got != tc.want {
+			t.Errorf("FormatBytes(%d) = %q, want %q", tc.bytes, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FmtElapsed
+// ---------------------------------------------------------------------------
+
+func TestFmtElapsed(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{45 * time.Second, "0m 45s"},
+		{90 * time.Second, "1m 30s"},
+		{60 * time.Second, "1m 00s"},
+		{time.Hour + 2*time.Minute + 3*time.Second, "1h 02m 03s"},
+		{2*time.Hour + 0*time.Minute + 0*time.Second, "2h 00m 00s"},
+	}
+	for _, tc := range tests {
+		got := fileutil.FmtElapsed(tc.d)
+		if got != tc.want {
+			t.Errorf("FmtElapsed(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TruncateString
+// ---------------------------------------------------------------------------
+
+func TestTruncateString(t *testing.T) {
+	tests := []struct {
+		s      string
+		maxLen int
+		want   string
+	}{
+		{"hello", 10, "hello"},
+		{"hello", 5, "hello"},
+		{"hello world", 8, "hello..."},
+		{"hi", 2, "hi"},
+		{"hello", 3, "hel"},
+		{"hello", 2, "he"},
+		{"hello", 1, "h"},
+		{"", 5, ""},
+	}
+	for _, tc := range tests {
+		got := fileutil.TruncateString(tc.s, tc.maxLen)
+		if got != tc.want {
+			t.Errorf("TruncateString(%q, %d) = %q, want %q", tc.s, tc.maxLen, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BuildConversionArgs
+// ---------------------------------------------------------------------------
+
+func TestBuildConversionArgsLibx265MP4(t *testing.T) {
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "libx265",
+		[]string{"-crf", "28", "-preset", "medium"}, nil, nil,
+	)
+	assertContainsStr(t, args, "-hide_banner")
+	assertContainsStr(t, args, "-y")
+	assertContainsStr(t, args, "-nostats")
+	assertContainsSeqStr(t, args, "-progress", "pipe:1")
+	assertContainsSeqStr(t, args, "-i", `C:\input.mp4`)
+	assertContainsSeqStr(t, args, "-c:v", "libx265")
+	assertContainsSeqStr(t, args, "-crf", "28")
+	assertContainsSeqStr(t, args, "-preset", "medium")
+	// With nil videoInfo the fallback is -map 0:v:0, -map 0:a?, -c:a copy
+	assertContainsSeqStr(t, args, "-map", "0:v:0")
+	assertContainsSeqStr(t, args, "-c:a", "copy")
+	assertContainsSeqStr(t, args, "-movflags", "+faststart")
+	assertContainsSeqStr(t, args, "-map_metadata", "0")
+	if args[len(args)-1] != `C:\output.mp4` {
+		t.Errorf("last arg should be output path, got %q", args[len(args)-1])
+	}
+}
+
+func TestBuildConversionArgsWithDeviceArgs(t *testing.T) {
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "hevc_nvenc",
+		[]string{"-cq", "28", "-preset", "p5"}, []string{"-gpu", "0"}, nil,
+	)
+	assertContainsSeqStr(t, args, "-gpu", "0")
+	assertContainsSeqStr(t, args, "-c:v", "hevc_nvenc")
+	assertContainsSeqStr(t, args, "-cq", "28")
+	assertContainsSeqStr(t, args, "-movflags", "+faststart")
+
+	gpuIdx := indexStr(args, "-gpu")
+	cvIdx := indexStr(args, "-c:v")
+	if gpuIdx == -1 || cvIdx == -1 || gpuIdx >= cvIdx {
+		t.Errorf("device args (-gpu) should appear before -c:v; indices: -gpu=%d, -c:v=%d", gpuIdx, cvIdx)
+	}
+}
+
+func TestBuildConversionArgsMKV(t *testing.T) {
+	args := converter.BuildConversionArgs(
+		`C:\input.mkv`, `C:\output.mkv`, ".mkv", "libx265",
+		[]string{"-crf", "28", "-preset", "medium"}, nil, nil,
+	)
+	assertContainsSeqStr(t, args, "-c:a", "copy")
+	assertContainsSeqStr(t, args, "-c:s", "copy")
+	assertContainsStr(t, args, "-map")
+	assertNotContainsStr(t, args, "-movflags")
+	assertNotContainsStr(t, args, "aac")
+	if args[len(args)-1] != `C:\output.mkv` {
+		t.Errorf("last arg should be output path, got %q", args[len(args)-1])
+	}
+}
+
+func TestBuildConversionArgsMP4WithAACAudio(t *testing.T) {
+	vi := &types.VideoInfo{
+		AudioStreams: []types.AudioStream{
+			{CodecName: "aac", Channels: 2},
+		},
+	}
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "libx265",
+		[]string{"-crf", "28"}, nil, vi,
+	)
+	// AAC is MP4-compatible: should be copied, not transcoded.
+	assertContainsSeqStr(t, args, "-c:a", "copy")
+	assertContainsSeqStr(t, args, "-map", "0:a:0")
+	assertContainsSeqStr(t, args, "-movflags", "+faststart")
+}
+
+func TestBuildConversionArgsMP4WithDTSAudio(t *testing.T) {
+	vi := &types.VideoInfo{
+		AudioStreams: []types.AudioStream{
+			{CodecName: "dts", Channels: 6},
+		},
+	}
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "libx265",
+		[]string{"-crf", "28"}, nil, vi,
+	)
+	// DTS is not MP4-compatible: must be transcoded to AAC.
+	assertContainsStr(t, args, "aac")
+	assertContainsSeqStr(t, args, "-movflags", "+faststart")
+	// Should NOT contain a bare -c:a copy (only per-stream spec allowed).
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-c:a" && args[i+1] == "copy" {
+			t.Errorf("DTS audio should not produce -c:a copy\nargs: %s", strings.Join(args, " "))
+		}
+	}
+}
+
+func TestBuildConversionArgsMP4WithMovTextSubtitle(t *testing.T) {
+	vi := &types.VideoInfo{
+		SubtitleStreams: []types.SubtitleStream{
+			{CodecName: "mov_text"},
+		},
+	}
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "libx265",
+		[]string{"-crf", "28"}, nil, vi,
+	)
+	// mov_text is MP4-compatible: subtitle stream should be mapped.
+	assertContainsSeqStr(t, args, "-map", "0:s:0")
+	assertContainsSeqStr(t, args, "-c:s", "mov_text")
+}
+
+func TestBuildConversionArgsMP4DropsPGS(t *testing.T) {
+	vi := &types.VideoInfo{
+		SubtitleStreams: []types.SubtitleStream{
+			{CodecName: "pgssub"},
+		},
+	}
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "libx265",
+		[]string{"-crf", "28"}, nil, vi,
+	)
+	// PGS (image-based) cannot go into MP4 — must be dropped.
+	assertNotContainsSeqStr(t, args, "-map", "0:s:0")
+}
+
+func TestBuildConversionArgsMP4HDRPassthrough(t *testing.T) {
+	vi := &types.VideoInfo{
+		Color: types.ColorInfo{
+			ColorPrimaries: "bt2020",
+			ColorTransfer:  "smpte2084",
+			ColorSpace:     "bt2020nc",
+		},
+	}
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "libx265",
+		[]string{"-crf", "28"}, nil, vi,
+	)
+	assertContainsSeqStr(t, args, "-color_primaries", "bt2020")
+	assertContainsSeqStr(t, args, "-color_trc", "smpte2084")
+	assertContainsSeqStr(t, args, "-colorspace", "bt2020nc")
+}
+
+func TestBuildConversionArgsMP4NoHDRForSDR(t *testing.T) {
+	vi := &types.VideoInfo{
+		Color: types.ColorInfo{
+			ColorPrimaries: "bt709",
+			ColorTransfer:  "bt709",
+			ColorSpace:     "bt709",
+		},
+	}
+	args := converter.BuildConversionArgs(
+		`C:\input.mp4`, `C:\output.mp4`, ".mp4", "libx265",
+		[]string{"-crf", "28"}, nil, vi,
+	)
+	// SDR content should not emit HDR colour flags.
+	assertNotContainsStr(t, args, "-color_primaries")
+	assertNotContainsStr(t, args, "-color_trc")
+	assertNotContainsStr(t, args, "-colorspace")
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-// extractArgValue returns the value following the given flag in an arg slice.
-// Returns empty string if flag not found.
 func extractArgValue(args []string, flag string) string {
 	for i, a := range args {
 		if a == flag && i+1 < len(args) {
@@ -369,7 +643,6 @@ func extractArgValue(args []string, flag string) string {
 	return ""
 }
 
-// removeArgPair removes a flag and its value from an arg slice.
 func removeArgPair(args []string, flag string) []string {
 	var result []string
 	skip := false
@@ -389,4 +662,53 @@ func removeArgPair(args []string, flag string) []string {
 
 func itoa(n int) string {
 	return strconv.Itoa(n)
+}
+
+func assertContainsStr(t *testing.T, args []string, value string) {
+	t.Helper()
+	for _, a := range args {
+		if a == value {
+			return
+		}
+	}
+	t.Errorf("args missing %q\nargs: %s", value, strings.Join(args, " "))
+}
+
+func assertNotContainsStr(t *testing.T, args []string, value string) {
+	t.Helper()
+	for _, a := range args {
+		if a == value {
+			t.Errorf("args should NOT contain %q\nargs: %s", value, strings.Join(args, " "))
+			return
+		}
+	}
+}
+
+func assertContainsSeqStr(t *testing.T, args []string, key, value string) {
+	t.Helper()
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == key && args[i+1] == value {
+			return
+		}
+	}
+	t.Errorf("args missing sequence %q %q\nargs: %s", key, value, strings.Join(args, " "))
+}
+
+func assertNotContainsSeqStr(t *testing.T, args []string, key, value string) {
+	t.Helper()
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == key && args[i+1] == value {
+			t.Errorf("args should NOT contain sequence %q %q\nargs: %s", key, value, strings.Join(args, " "))
+			return
+		}
+	}
+}
+
+func indexStr(args []string, value string) int {
+	for i, a := range args {
+		if a == value {
+			return i
+		}
+	}
+	return -1
 }

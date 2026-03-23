@@ -176,7 +176,15 @@ func TestRaceBenchmarkCacheConcurrent(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			configPath := filepath.Join(tmpDir, fmt.Sprintf("config_%d.json", idx))
+			// Each goroutine gets its own subdirectory so that CachePath()
+			// resolves to a distinct benchmark_cache.json per goroutine,
+			// preventing concurrent writes to the same file on Windows.
+			subDir := filepath.Join(tmpDir, fmt.Sprintf("g%d", idx))
+			if err := os.MkdirAll(subDir, 0755); err != nil {
+				t.Errorf("goroutine %d: mkdir: %v", idx, err)
+				return
+			}
+			configPath := filepath.Join(subDir, "config.json")
 
 			seed := map[string]json.RawMessage{
 				"video_encoder": json.RawMessage(`"libx265"`),
@@ -215,7 +223,7 @@ func TestRaceBenchmarkCacheConcurrent(t *testing.T) {
 	wg.Wait()
 
 	for i := 0; i < goroutines; i++ {
-		configPath := filepath.Join(tmpDir, fmt.Sprintf("config_%d.json", i))
+		configPath := filepath.Join(tmpDir, fmt.Sprintf("g%d", i), "config.json")
 		cache, err := benchmark.LoadCache(configPath)
 		if err != nil {
 			t.Errorf("final load goroutine %d: %v", i, err)

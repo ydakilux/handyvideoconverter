@@ -76,6 +76,12 @@ go test -bench=. ./...
 
 # Run tests with timeout
 go test -timeout 30s ./...
+
+# Makefile shortcuts
+make test           # go test ./... -count=1 -timeout 120s
+make test-short     # go test -short ./... (skips integration tests)
+make test-cover     # run tests and print per-package coverage
+make cover-html     # open coverage report in browser
 ```
 
 ### Linting & Formatting
@@ -112,7 +118,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/schollz/progressbar/v3"
+	"github.com/charmbracelet/bubbletea"
 	"github.com/sirupsen/logrus"
 	"github.com/zeebo/blake3"
 )
@@ -274,3 +280,4 @@ info, _ := os.Stat(filePath)
 - Use `cmd /c start "" "<folder>"` to open folders in Explorer
 - Executable names include .exe extension
 - Config paths with backslashes must be escaped in JSON: `"ffmpeg\\bin\\ffmpeg.exe"`
+- **FFmpeg resolution**: `exec.LookPath("ffmpeg")` resolves to the real `ffmpeg.exe` on PATH (e.g. `C:\ProgramData\chocolatey\bin\ffmpeg.exe`). The legacy `ffmpeg.cmd` WSL wrapper has been removed. Integration tests use a `lookupExe` helper that prefers `.exe` over `.cmd` when both are on PATH.

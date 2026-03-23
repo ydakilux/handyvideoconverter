@@ -30,7 +30,7 @@ endif
 
 .PHONY: all build build-windows build-linux build-wsl build-all release release-windows release-linux release-all \
         benchmark benchmark-windows benchmark-linux benchmark-all \
-        test test-verbose test-race cover fmt vet lint tidy clean help
+        test test-verbose test-race test-short test-cover cover cover-html fmt vet lint tidy clean help
 
 all: lint test build  ## Run lint + test + build (auto-detects OS)
 
@@ -87,9 +87,17 @@ test-verbose:  ## Run tests with verbose output
 test-race:  ## Run tests with race detector
 	go test -race ./...
 
+test-short:  ## Run only fast unit tests (skip integration tests that need ffmpeg/GPU)
+	go test -short ./...
+
+test-cover:  ## Run tests and print per-package coverage summary
+	go test -cover ./...
+
 cover:  ## Generate coverage report and open in browser
 	go test -coverprofile=$(COVERAGE) ./...
 	go tool cover -html=$(COVERAGE)
+
+cover-html: cover  ## Alias for cover (generate HTML report)
 
 # ──────────────────────────────────────────────────────────────────
 # Code quality
@@ -145,7 +153,10 @@ help:  ## Print available targets with descriptions
 	@echo   make test             Run all tests
 	@echo   make test-verbose     Run tests with verbose output
 	@echo   make test-race        Run tests with race detector
+	@echo   make test-short       Run only fast unit tests (no ffmpeg/GPU required)
+	@echo   make test-cover       Run tests and print per-package coverage summary
 	@echo   make cover            Generate coverage report (opens browser)
+	@echo   make cover-html       Alias for cover
 	@echo   make fmt              Format code
 	@echo   make vet              Run static analysis
 	@echo   make lint             Run fmt + vet
