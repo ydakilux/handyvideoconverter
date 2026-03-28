@@ -15,8 +15,10 @@ func TestLoadConfigReadsExistingJSON(t *testing.T) {
 	cfgPath := filepath.Join(dir, "test_config.json")
 
 	want := types.Config{
-		ServerURL:          "http://myserver:5341/",
-		APIKey:             "test-key",
+		Seq: types.SeqConfig{
+			ServerURL: "http://myserver:5341/",
+			APIKey:    "test-key",
+		},
 		UsePartialHash:     false,
 		MaxQueueSize:       5,
 		MediaInfoPath:      "custom\\MediaInfo.exe",
@@ -46,11 +48,11 @@ func TestLoadConfigReadsExistingJSON(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if got.ServerURL != want.ServerURL {
-		t.Errorf("ServerURL = %q, want %q", got.ServerURL, want.ServerURL)
+	if got.Seq.ServerURL != want.Seq.ServerURL {
+		t.Errorf("Seq.ServerURL = %q, want %q", got.Seq.ServerURL, want.Seq.ServerURL)
 	}
-	if got.APIKey != want.APIKey {
-		t.Errorf("APIKey = %q, want %q", got.APIKey, want.APIKey)
+	if got.Seq.APIKey != want.Seq.APIKey {
+		t.Errorf("Seq.APIKey = %q, want %q", got.Seq.APIKey, want.Seq.APIKey)
 	}
 	if got.UsePartialHash != want.UsePartialHash {
 		t.Errorf("UsePartialHash = %v, want %v", got.UsePartialHash, want.UsePartialHash)
@@ -73,8 +75,12 @@ func TestLoadConfigReadsExistingJSON(t *testing.T) {
 	if got.LogLevel != want.LogLevel {
 		t.Errorf("LogLevel = %q, want %q", got.LogLevel, want.LogLevel)
 	}
-	if len(got.FileExtensions) != len(want.FileExtensions) {
-		t.Errorf("FileExtensions len = %d, want %d", len(got.FileExtensions), len(want.FileExtensions))
+	// Migration appends missing canonical extensions, so the loaded list will be
+	// at least as large as want. Verify the original entries are all present.
+	for _, ext := range want.FileExtensions {
+		if !containsExt(got.FileExtensions, ext) {
+			t.Errorf("expected extension %q to be present, got %v", ext, got.FileExtensions)
+		}
 	}
 }
 
@@ -93,8 +99,8 @@ func TestCreateDefaultConfigCreatesFile(t *testing.T) {
 	}
 
 	// Verify defaults
-	if cfg.ServerURL != "http://localhost:5341/" {
-		t.Errorf("ServerURL = %q, want %q", cfg.ServerURL, "http://localhost:5341/")
+	if cfg.Seq.ServerURL != "http://localhost:5341/" {
+		t.Errorf("Seq.ServerURL = %q, want %q", cfg.Seq.ServerURL, "http://localhost:5341/")
 	}
 	if cfg.VideoEncoder != "hevc_nvenc" {
 		t.Errorf("VideoEncoder = %q, want %q", cfg.VideoEncoder, "hevc_nvenc")
@@ -111,8 +117,8 @@ func TestCreateDefaultConfigCreatesFile(t *testing.T) {
 	if cfg.LogLevel != "INFO" {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "INFO")
 	}
-	if len(cfg.FileExtensions) != 11 {
-		t.Errorf("FileExtensions len = %d, want 11", len(cfg.FileExtensions))
+	if len(cfg.FileExtensions) != 13 {
+		t.Errorf("FileExtensions len = %d, want 13", len(cfg.FileExtensions))
 	}
 
 	// Verify file is valid JSON that round-trips
@@ -124,8 +130,8 @@ func TestCreateDefaultConfigCreatesFile(t *testing.T) {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if loaded.ServerURL != cfg.ServerURL {
-		t.Errorf("round-trip ServerURL mismatch")
+	if loaded.Seq.ServerURL != cfg.Seq.ServerURL {
+		t.Errorf("round-trip Seq.ServerURL mismatch")
 	}
 }
 
@@ -348,4 +354,164 @@ func TestLoadConfigWithBenchmarkSaveCacheFormat(t *testing.T) {
 
 	// BenchmarkCache field is no longer in Config — loading a config that still
 	// contains "benchmark_cache" should silently ignore the unknown field.
+}
+
+// ── Migration tests ───────────────────────────────────────────────────────────
+
+// TestMigrateSeqFlatFields verifies that old-style flat seq fields
+// (server_url / api_key / seq_enabled) are promoted into the new cfg.Seq
+// struct and persisted back to the file.
+func TestMigrateSeqFlatFields(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "legacy_seq.json")
+
+	legacy := `{
+	  "server_url": "http://myseq:5341/",
+	  "api_key": "legacy-key",
+	  "seq_enabled": true,
+	  "video_encoder": "libx265",
+	  "quality_preset": "balanced",
+	  "file_extensions": [".MP4", ".MKV"],
+	  "log_level": "INFO"
+	}`
+	if err := os.WriteFile(cfgPath, []byte(legacy), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	// Flat fields must have been promoted.
+	if cfg.Seq.ServerURL != "http://myseq:5341/" {
+		t.Errorf("Seq.ServerURL = %q, want %q", cfg.Seq.ServerURL, "http://myseq:5341/")
+	}
+	if cfg.Seq.APIKey != "legacy-key" {
+		t.Errorf("Seq.APIKey = %q, want %q", cfg.Seq.APIKey, "legacy-key")
+	}
+	if !cfg.Seq.Enabled {
+		t.Error("Seq.Enabled should be true after migration")
+	}
+
+	// Migration must have been written back to the file.
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadFile after migration: %v", err)
+	}
+	var persisted types.Config
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("Unmarshal persisted config: %v", err)
+	}
+	if persisted.Seq.ServerURL != "http://myseq:5341/" {
+		t.Errorf("persisted Seq.ServerURL = %q", persisted.Seq.ServerURL)
+	}
+}
+
+// TestMigrateNewExtensionAdded verifies that a new canonical extension (.VID)
+// is appended to an existing custom list and the file is updated.
+func TestMigrateNewExtensionAdded(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "no_vid.json")
+
+	// Config without .VID
+	old := `{
+	  "video_encoder": "libx265",
+	  "quality_preset": "balanced",
+	  "file_extensions": [".MP4", ".MKV", ".AVI"],
+	  "log_level": "INFO"
+	}`
+	if err := os.WriteFile(cfgPath, []byte(old), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	// .VID must have been added.
+	if !containsExt(cfg.FileExtensions, ".VID") {
+		t.Errorf("expected .VID in FileExtensions after migration, got %v", cfg.FileExtensions)
+	}
+
+	// Custom entries must be preserved.
+	for _, ext := range []string{".MP4", ".MKV", ".AVI"} {
+		if !containsExt(cfg.FileExtensions, ext) {
+			t.Errorf("expected %s to be preserved, got %v", ext, cfg.FileExtensions)
+		}
+	}
+
+	// Persisted file must also contain .VID.
+	data, _ := os.ReadFile(cfgPath)
+	var persisted types.Config
+	json.Unmarshal(data, &persisted) //nolint:errcheck
+	if !containsExt(persisted.FileExtensions, ".VID") {
+		t.Errorf("persisted config should contain .VID, got %v", persisted.FileExtensions)
+	}
+}
+
+// TestMigrateNoChangeWhenAlreadyCurrent verifies that a fully up-to-date config
+// is not needlessly rewritten.
+func TestMigrateNoChangeWhenAlreadyCurrent(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "current.json")
+
+	cfg, err := CreateDefaultConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("CreateDefaultConfig: %v", err)
+	}
+	_ = cfg
+
+	stat1, _ := os.Stat(cfgPath)
+
+	_, err = LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	stat2, _ := os.Stat(cfgPath)
+	if stat1.ModTime() != stat2.ModTime() {
+		t.Error("config file was rewritten even though no migration was needed")
+	}
+}
+
+// TestMigrateBenchmarkCacheKeyStripped verifies that a config file that still
+// contains the legacy "benchmark_cache" key (written by older versions) has
+// that key removed after migration.
+func TestMigrateBenchmarkCacheKeyStripped(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "legacy_bench.json")
+
+	legacy := `{
+	  "video_encoder": "hevc_nvenc",
+	  "quality_preset": "balanced",
+	  "file_extensions": [".MP4", ".MKV"],
+	  "log_level": "INFO",
+	  "benchmark_cache": {
+	    "results": {},
+	    "version": "1"
+	  }
+	}`
+	if err := os.WriteFile(cfgPath, []byte(legacy), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	// The rewritten file must not contain the benchmark_cache key.
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadFile after migration: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, still := raw["benchmark_cache"]; still {
+		t.Error("benchmark_cache key should have been removed by migration")
+	}
 }

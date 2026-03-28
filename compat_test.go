@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -22,6 +21,18 @@ import (
 	"video-converter/internal/types"
 )
 
+// containsExtCompat is a local copy of config.containsExt for use in
+// package main_test (which cannot import internal/config).
+func containsExtCompat(list []string, ext string) bool {
+	upper := strings.ToUpper(ext)
+	for _, e := range list {
+		if strings.ToUpper(e) == upper {
+			return true
+		}
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Old-format config (no GPU fields) loads cleanly
 // ---------------------------------------------------------------------------
@@ -31,8 +42,11 @@ func TestBackwardCompatConfig(t *testing.T) {
 	cfgPath := filepath.Join(dir, "old_config.json")
 
 	oldJSON := `{
-  "server_url": "http://myseq:5341/",
-  "api_key": "old-key-123",
+  "seq": {
+    "enabled": false,
+    "server_url": "http://myseq:5341/",
+    "api_key": "old-key-123"
+  },
   "use_partial_hash": true,
   "max_queue_size": 5,
   "mediainfo_path": "MediaInfo\\MediaInfo.exe",
@@ -51,11 +65,11 @@ func TestBackwardCompatConfig(t *testing.T) {
 		t.Fatalf("LoadConfig with old-format JSON must succeed: %v", err)
 	}
 
-	if cfg.ServerURL != "http://myseq:5341/" {
-		t.Errorf("ServerURL = %q, want %q", cfg.ServerURL, "http://myseq:5341/")
+	if cfg.Seq.ServerURL != "http://myseq:5341/" {
+		t.Errorf("Seq.ServerURL = %q, want %q", cfg.Seq.ServerURL, "http://myseq:5341/")
 	}
-	if cfg.APIKey != "old-key-123" {
-		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "old-key-123")
+	if cfg.Seq.APIKey != "old-key-123" {
+		t.Errorf("Seq.APIKey = %q, want %q", cfg.Seq.APIKey, "old-key-123")
 	}
 	if !cfg.UsePartialHash {
 		t.Error("UsePartialHash should be true")
@@ -75,9 +89,12 @@ func TestBackwardCompatConfig(t *testing.T) {
 	if cfg.QualityPreset != "balanced" {
 		t.Errorf("QualityPreset = %q, want %q", cfg.QualityPreset, "balanced")
 	}
-	wantExts := []string{".MOV", ".AVI", ".MKV", ".MP4"}
-	if !reflect.DeepEqual(cfg.FileExtensions, wantExts) {
-		t.Errorf("FileExtensions = %v, want %v", cfg.FileExtensions, wantExts)
+	// Migration appends missing canonical extensions; verify the original entries
+	// from the old config are still present.
+	for _, ext := range []string{".MOV", ".AVI", ".MKV", ".MP4"} {
+		if !containsExtCompat(cfg.FileExtensions, ext) {
+			t.Errorf("FileExtensions missing %q, got %v", ext, cfg.FileExtensions)
+		}
 	}
 	if cfg.LogLevel != "DEBUG" {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "DEBUG")

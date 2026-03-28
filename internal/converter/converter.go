@@ -43,9 +43,11 @@ type Converter struct {
 func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 	fileName := filepath.Base(job.FilePath)
 
-	c.Log.Infof("Converting [%d/%d]: %s (%dp)", job.FileNumber, job.TotalFiles, fileName, job.Height)
+	// Debug-level: these appear in the log file but not in the TUI viewport,
+	// keeping the viewport clean for completion lines only.
+	c.Log.Debugf("Converting [%d/%d]: %s (%dp)", job.FileNumber, job.TotalFiles, fileName, job.Height)
 	if strings.ToLower(filepath.Ext(job.FilePath)) == ".mkv" {
-		c.Log.Infof("  Format: MKV (preserving all audio/subtitle streams & metadata)")
+		c.Log.Debugf("  Format: MKV (preserving all audio/subtitle streams & metadata)")
 	}
 
 	if dryRun {
@@ -168,6 +170,8 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 		savedMB := origMB - newMB
 		summary := fmt.Sprintf("✓ KEPT    [%d/%d] %-32s  %.2f MB → %.2f MB  (-%.2f MB, %.1f%%)",
 			job.FileNumber, job.TotalFiles, fileutil.TruncateString(fileName, 32), origMB, newMB, savedMB, reduction)
+		// Log to file only (TUI gets it via CompleteKept; logging here would duplicate).
+		c.Log.Infof("%s%s", tui.FileOnlyPrefix, summary)
 		c.UI.CompleteKept(jobID, summary)
 
 		os.MkdirAll(finalDir, 0755) //nolint:errcheck
@@ -197,6 +201,8 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 		increasedMB := newMB - origMB
 		summary := fmt.Sprintf("✗ DISCARD [%d/%d] %-32s  %.2f MB → %.2f MB  (+%.2f MB, +%.1f%%)",
 			job.FileNumber, job.TotalFiles, fileutil.TruncateString(fileName, 32), origMB, newMB, increasedMB, increase)
+		// Log to file only (TUI gets it via CompleteDiscard; logging here would duplicate).
+		c.Log.Infof("%s%s", tui.FileOnlyPrefix, summary)
 		c.UI.CompleteDiscard(jobID, summary)
 
 		os.Remove(tempPath) //nolint:errcheck

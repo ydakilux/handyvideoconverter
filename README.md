@@ -172,17 +172,75 @@ When a GPU encoder fails mid-conversion, the tool asks whether to retry with CPU
 
 ## ⚙️ Configuration
 
-The tool auto-creates `configVideoConversion.json` on first run. Key settings:
+The tool auto-creates `configVideoConversion.json` on first run. Here is the full set of available fields:
 
 ```json
 {
-  "video_encoder": "auto",
-  "quality_preset": "balanced",
-  "max_queue_size": 3,
-  "use_partial_hash": true
+  "video_encoder":       "auto",
+  "quality_preset":      "balanced",
+  "max_queue_size":      3,
+  "max_parallel_jobs":   1,
+  "use_partial_hash":    true,
+  "log_level":           "INFO",
+  "ffmpeg_path":         "",
+  "ffprobe_path":        "",
+  "temp_directory":      "",
+  "file_extensions":     [".MOV", ".AVI", ".MKV", ".MP4", ".WMV", ".M4V", ".FLV", ".F4V", ".MPG", ".ASF", ".TS", ".M2TS", ".VID"],
+
+  "seq": {
+    "enabled":    false,
+    "server_url": "http://localhost:5341/",
+    "api_key":    ""
+  }
 }
 ```
 
+### Field Reference
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `video_encoder` | `"auto"` | Encoder to use: `auto`, `hevc_nvenc`, `hevc_amf`, `hevc_qsv`, `libx265` |
+| `quality_preset` | `"balanced"` | Encoding quality: `high_quality`, `balanced`, `space_saver` |
+| `max_queue_size` | `3` | Job queue buffer size |
+| `max_parallel_jobs` | `1` | Concurrent conversions (0 = use benchmark recommendation) |
+| `use_partial_hash` | `true` | Fast file identification using a partial BLAKE3 hash |
+| `log_level` | `"INFO"` | Log verbosity: `DEBUG`, `INFO`, `WARN`, `ERROR` |
+| `ffmpeg_path` | `""` | Path to `ffmpeg.exe`; leave empty to resolve from PATH |
+| `ffprobe_path` | `""` | Path to `ffprobe.exe`; leave empty to resolve from PATH |
+| `temp_directory` | `""` | Override temp file location; defaults to the output drive |
+| `file_extensions` | (13 formats) | List of input extensions to scan (case-insensitive) |
+| **`seq.enabled`** | `false` | Enable Seq structured log forwarding |
+| `seq.server_url` | `"http://localhost:5341/"` | Seq server base URL |
+| `seq.api_key` | `""` | Seq API key (leave empty if Seq is running without authentication) |
+
+### Seq Logging
+
+[Seq](https://datalust.co/seq) is an optional structured log server. When enabled, every log event is forwarded to Seq over HTTP in addition to being written to the local log file.
+
+To enable it:
+```json
+{
+  "seq": {
+    "enabled":    true,
+    "server_url": "http://localhost:5341/",
+    "api_key":    "your-api-key-here"
+  }
+}
+```
+
+- `seq.enabled: false` (the default) — Seq is completely disabled regardless of `server_url` / `api_key`
+- If the Seq server is unreachable, the hook disables itself after 5 consecutive failures and logs a warning to stderr; conversions continue normally
+
+### Config Migration
+
+The tool automatically migrates existing config files on load — no manual steps required:
+
+| What changed | Migration behaviour |
+|---|---|
+| Seq fields moved from flat (`server_url`, `api_key`, `seq_enabled`) to nested `seq` object | Old flat values are promoted into `seq` and removed from the top level |
+| New extension added to the canonical list (e.g. `.VID`) | Missing extension is appended to your existing list; custom entries are preserved |
+
+The migrated file is rewritten atomically (write to `.tmp` then rename) so a crash mid-write cannot corrupt your config. If the write fails the tool continues with the migrated values in memory and prints a warning to stderr.
 ### Quality Presets
 
 | Preset | Use When | Size Reduction | Quality |

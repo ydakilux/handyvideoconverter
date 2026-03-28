@@ -17,14 +17,14 @@ import (
 func setupTestLogger(t *testing.T) (*logrus.Logger, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	logger, cleanup := SetupLogging("", "", "info", tmpDir, nil)
+	logger, cleanup := SetupLogging("", "", "info", tmpDir, false, nil)
 	t.Cleanup(cleanup)
 	return logger, tmpDir
 }
 func setupTestLoggerWithParams(t *testing.T, serverURL, apiKey, logLevel string) (*logrus.Logger, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	logger, cleanup := SetupLogging(serverURL, apiKey, logLevel, tmpDir, nil)
+	logger, cleanup := SetupLogging(serverURL, apiKey, logLevel, tmpDir, true, nil)
 	t.Cleanup(cleanup)
 	return logger, tmpDir
 }
@@ -301,6 +301,26 @@ func TestSetupLoggingNoSeqHookWhenServerURLEmpty(t *testing.T) {
 		for _, h := range levelHooks {
 			if _, ok := h.(*SeqHook); ok {
 				t.Error("expected no SeqHook when serverURL is empty")
+				return
+			}
+		}
+	}
+}
+
+func TestSetupLoggingNoSeqHookWhenSeqDisabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	logger, cleanup := SetupLogging(server.URL, "key", "info", tmpDir, false, nil)
+	t.Cleanup(cleanup)
+
+	for _, levelHooks := range logger.Hooks {
+		for _, h := range levelHooks {
+			if _, ok := h.(*SeqHook); ok {
+				t.Error("expected no SeqHook when seq_enabled is false")
 				return
 			}
 		}

@@ -13,6 +13,14 @@ import (
 
 var ValidEncoders = []string{"auto", "hevc_nvenc", "hevc_amf", "hevc_qsv", "libx265"}
 
+// legacyConfig captures pre-SeqConfig flat fields so LoadConfig can migrate
+// old JSON files transparently.
+type legacyConfig struct {
+	ServerURL  string `json:"server_url"`
+	APIKey     string `json:"api_key"`
+	SeqEnabled bool   `json:"seq_enabled"`
+}
+
 func LoadConfig(path string) (types.Config, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return CreateDefaultConfig(path)
@@ -29,13 +37,90 @@ func LoadConfig(path string) (types.Config, error) {
 	if err := ValidateEncoder(cfg.VideoEncoder); err != nil {
 		return types.Config{}, err
 	}
+
+	migrated := migrate(&cfg, data)
+	if migrated {
+		if err := writeConfig(path, cfg); err != nil {
+			// Non-fatal: return the migrated config even if we can't persist it.
+			fmt.Fprintf(os.Stderr, "WARNING: could not persist config migration: %v\n", err)
+		}
+	}
+
 	return cfg, nil
+}
+
+// migrate applies any pending in-place migrations to cfg, using the raw JSON
+// bytes to detect which legacy fields were present. Returns true if anything
+// was changed.
+func migrate(cfg *types.Config, raw []byte) bool {
+	changed := false
+
+	// ── Migration 1: flat Seq fields → cfg.Seq struct ───────────────────────
+	// If the new "seq" object is at its zero value but the old flat keys exist
+	// in the JSON, promote them.
+	if cfg.Seq == (types.SeqConfig{}) {
+		var leg legacyConfig
+		if err := json.Unmarshal(raw, &leg); err == nil {
+			if leg.ServerURL != "" || leg.APIKey != "" || leg.SeqEnabled {
+				cfg.Seq = types.SeqConfig{
+					Enabled:   leg.SeqEnabled,
+					ServerURL: leg.ServerURL,
+					APIKey:    leg.APIKey,
+				}
+				changed = true
+			}
+		}
+	}
+
+	// ── Migration 2: ensure known extensions are present ────────────────────
+	// Add any extension from the canonical default list that is missing from
+	// the user's list, preserving their custom entries and order.
+	for _, ext := range defaultExtensions() {
+		if !containsExt(cfg.FileExtensions, ext) {
+			cfg.FileExtensions = append(cfg.FileExtensions, ext)
+			changed = true
+		}
+	}
+
+	// ── Migration 3: strip legacy benchmark_cache key from config file ───────
+	// Older versions wrote benchmark results directly into the config JSON.
+	// The benchmark subsystem now uses a separate benchmark_cache.json file.
+	// Detect the stale key and trigger a rewrite so it disappears.
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err == nil {
+		if _, hasBench := rawMap["benchmark_cache"]; hasBench {
+			changed = true // rewrite will serialise cfg which has no such field
+		}
+	}
+
+	return changed
+}
+
+// defaultExtensions returns the canonical set of extensions every config
+// should have. New entries added here are automatically migrated into old
+// config files on next load.
+func defaultExtensions() []string {
+	return []string{".MOV", ".AVI", ".MKV", ".MP4", ".WMV", ".M4V", ".FLV", ".F4V", ".MPG", ".ASF", ".TS", ".M2TS", ".VID"}
+}
+
+// containsExt reports whether ext (case-insensitive) is in list.
+func containsExt(list []string, ext string) bool {
+	upper := strings.ToUpper(ext)
+	for _, e := range list {
+		if strings.ToUpper(e) == upper {
+			return true
+		}
+	}
+	return false
 }
 
 func CreateDefaultConfig(path string) (types.Config, error) {
 	cfg := types.Config{
-		ServerURL:          "http://localhost:5341/",
-		APIKey:             "",
+		Seq: types.SeqConfig{
+			Enabled:   false,
+			ServerURL: "http://localhost:5341/",
+			APIKey:    "",
+		},
 		UsePartialHash:     true,
 		MaxQueueSize:       3,
 		MaxParallelJobs:    1,
@@ -49,17 +134,26 @@ func CreateDefaultConfig(path string) (types.Config, error) {
 		CustomQuality720p:  0,
 		CustomQuality1080p: 0,
 		CustomQuality4K:    0,
-		FileExtensions:     []string{".MOV", ".AVI", ".MKV", ".MP4", ".WMV", ".M4V", ".FLV", ".MPG", ".ASF", ".TS", ".M2TS"},
+		FileExtensions:     defaultExtensions(),
 		LogLevel:           "INFO",
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return types.Config{}, err
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := writeConfig(path, cfg); err != nil {
 		return types.Config{}, err
 	}
 	return cfg, nil
+}
+
+// writeConfig serialises cfg to path atomically (write to .tmp then rename).
+func writeConfig(path string, cfg types.Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func ValidateEncoder(encoder string) error {

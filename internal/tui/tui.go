@@ -153,6 +153,7 @@ const (
 	kindDiscard
 	kindError
 	kindSkipped
+	kindSummary // used for the final stats block — rendered in bright heading colour
 )
 
 // tickCmd fires a repaint message every repaintInterval.
@@ -495,7 +496,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Append a blank separator then all summary lines.
 		m.logLines = append(m.logLines, logLine{text: "", kind: kindSkipped})
 		for _, l := range msg.lines {
-			m.logLines = append(m.logLines, logLine{text: l, kind: kindSkipped})
+			m.logLines = append(m.logLines, logLine{text: l, kind: kindSummary})
 		}
 		if len(m.logLines) > maxLogLines {
 			m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
@@ -654,6 +655,8 @@ func (m model) renderLogLine(ll logLine, w int) string {
 		return styleLogDiscard.Render(text)
 	case kindError:
 		return styleLogErr.Render(text)
+	case kindSummary:
+		return lipgloss.NewStyle().Foreground(colorHeading).Render(text)
 	default:
 		return styleLogInfo.Render(text)
 	}
@@ -1028,11 +1031,27 @@ type tuiWriter struct {
 	plainW io.Writer
 }
 
+// fileOnlyPrefix is a sentinel prepended to log messages that should be written
+// to the log file but NOT displayed in the TUI viewport.  tuiWriter strips the
+// prefix before forwarding and silently drops the line from the TUI.
+const fileOnlyPrefix = "\x00FILEONLY\x00"
+
+// FileOnlyPrefix is the exported sentinel for use by other packages.
+// Prepend it to a logrus message to have it written to the log file only,
+// bypassing the TUI viewport.
+const FileOnlyPrefix = fileOnlyPrefix
+
 func (w *tuiWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.plain {
-		return w.plainW.Write(p)
+		// In plain mode strip the sentinel before writing.
+		out := strings.ReplaceAll(string(p), fileOnlyPrefix, "")
+		if out == "" || out == "\n" {
+			return len(p), nil
+		}
+		_, err = w.plainW.Write([]byte(out))
+		return len(p), err
 	}
 	w.buf.Write(p)
 	// Flush complete lines
@@ -1045,7 +1064,7 @@ func (w *tuiWriter) Write(p []byte) (n int, err error) {
 		line := strings.TrimRight(s[:idx], "\r")
 		w.buf.Reset()
 		w.buf.WriteString(s[idx+1:])
-		if line != "" {
+		if line != "" && !strings.Contains(line, fileOnlyPrefix) {
 			w.prog.Send(msgLog{text: line})
 		}
 	}

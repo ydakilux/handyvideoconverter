@@ -53,7 +53,7 @@ type App struct {
 	configFilePath  string
 	log             *logrus.Logger
 	logCleanup      func()
-	logFlush        func(serverURL, apiKey, execDir string, w io.Writer) (*logrus.Logger, func())
+	logFlush        func(serverURL, apiKey, execDir string, seqEnabled bool, w io.Writer) (*logrus.Logger, func())
 	dbManager       *database.DatabaseManager
 	stats           types.Stats
 	selectedEncoder encoder.Encoder
@@ -210,7 +210,7 @@ func (a *App) Run() error {
 	}
 	// Phase 2: flush buffered early logs, open real log file, route through TUI.
 	if a.logFlush != nil {
-		a.log, a.logCleanup = a.logFlush(a.config.ServerURL, a.config.APIKey, a.execDir, a.ui.Writer())
+		a.log, a.logCleanup = a.logFlush(a.config.Seq.ServerURL, a.config.Seq.APIKey, a.execDir, a.config.Seq.Enabled, a.ui.Writer())
 		a.logFlush = nil
 	}
 
@@ -281,16 +281,24 @@ func (a *App) Run() error {
 	a.dbManager.SaveAll()
 
 	elapsed := a.ui.Elapsed()
-	summary := a.buildStatsSummary(elapsed)
+	tuiSummary := a.buildStatsSummary(elapsed)
+
+	// Write the summary to the log file before tearing down the TUI so it is
+	// always persisted regardless of how the user exits.
+	for _, line := range tuiSummary {
+		a.log.Info(line)
+	}
 
 	// Show the summary banner inside the TUI log viewport and wait for the user
 	// to press Enter/q before tearing down the alt-screen.
 	// In non-interactive / plain-text mode ShowSummary falls back to printing
 	// directly and returns immediately.
-	a.ui.ShowSummary(summary)
+	a.ui.ShowSummary(tuiSummary)
 
 	// After ShowSummary the alt-screen is gone — safe to write to stdout.
-	a.ui.PrintSummary(summary)
+	// Print the box-art version for readability in the plain terminal.
+	boxSummary := a.buildStatsSummaryBox(elapsed)
+	a.ui.PrintSummary(boxSummary)
 
 	openHSortedFolders(a.stats.TouchedDrives)
 
@@ -427,6 +435,47 @@ func (a *App) runBenchmarks(ffmpegExe string) error {
 }
 
 func (a *App) buildStatsSummary(elapsed time.Duration) []string {
+	a.stats.Mu.Lock()
+	defer a.stats.Mu.Unlock()
+
+	var lines []string
+	lines = append(lines,
+		"",
+		"  VIDEO CONVERSION SUMMARY",
+		"  ─────────────────────────────────────",
+		fmt.Sprintf("  Files Analyzed:     %d", a.stats.FilesAnalyzed),
+		fmt.Sprintf("  Files Converted:    %d", a.stats.FilesProcessed),
+		fmt.Sprintf("    → Improved:       %d", a.stats.FilesImproved),
+		fmt.Sprintf("    → Discarded:      %d", a.stats.FilesDiscarded),
+		fmt.Sprintf("  Files Skipped:      %d", a.stats.FilesSkipped),
+		fmt.Sprintf("  Files Errored:      %d", a.stats.FilesErrored),
+		"  ─────────────────────────────────────",
+	)
+
+	if a.stats.OriginalBytes > 0 {
+		saved := a.stats.OriginalBytes - a.stats.FinalBytes
+		pct := float64(saved) / float64(a.stats.OriginalBytes) * 100
+		lines = append(lines,
+			fmt.Sprintf("  Original Size:      %s", fileutil.FormatBytes(a.stats.OriginalBytes)),
+			fmt.Sprintf("  Final Size:         %s", fileutil.FormatBytes(a.stats.FinalBytes)),
+			fmt.Sprintf("  Space Saved:        %s  (%.1f%%)", fileutil.FormatBytes(saved), pct),
+		)
+	}
+
+	if elapsed > 0 {
+		lines = append(lines,
+			"  ─────────────────────────────────────",
+			fmt.Sprintf("  Total Time:         %s", fileutil.FmtElapsed(elapsed)),
+		)
+	}
+
+	lines = append(lines, "")
+	return lines
+}
+
+// buildStatsSummaryBox returns the same data formatted as a fixed-width box for
+// the post-TUI plain-text stdout print.
+func (a *App) buildStatsSummaryBox(elapsed time.Duration) []string {
 	a.stats.Mu.Lock()
 	defer a.stats.Mu.Unlock()
 

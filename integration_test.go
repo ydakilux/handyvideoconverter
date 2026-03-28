@@ -211,8 +211,11 @@ func TestIntegrationConfigBackwardCompat(t *testing.T) {
 
 	// Write a minimal "old-style" config JSON with NO GPU-related fields
 	oldConfig := map[string]interface{}{
-		"server_url":       "http://localhost:5341/",
-		"api_key":          "",
+		"seq": map[string]interface{}{
+			"enabled":    false,
+			"server_url": "http://localhost:5341/",
+			"api_key":    "",
+		},
 		"use_partial_hash": true,
 		"max_queue_size":   3,
 		"mediainfo_path":   "MediaInfo.exe",

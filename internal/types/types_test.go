@@ -7,8 +7,11 @@ import (
 
 func TestConfigJSONRoundTrip(t *testing.T) {
 	original := Config{
-		ServerURL:          "http://localhost:5341/",
-		APIKey:             "test-key",
+		Seq: SeqConfig{
+			Enabled:   true,
+			ServerURL: "http://localhost:5341/",
+			APIKey:    "test-key",
+		},
 		UsePartialHash:     true,
 		MaxQueueSize:       3,
 		MediaInfoPath:      "MediaInfo.exe",
@@ -35,11 +38,14 @@ func TestConfigJSONRoundTrip(t *testing.T) {
 		t.Fatalf("failed to unmarshal Config: %v", err)
 	}
 
-	if decoded.ServerURL != original.ServerURL {
-		t.Errorf("ServerURL: got %q, want %q", decoded.ServerURL, original.ServerURL)
+	if decoded.Seq.ServerURL != original.Seq.ServerURL {
+		t.Errorf("Seq.ServerURL: got %q, want %q", decoded.Seq.ServerURL, original.Seq.ServerURL)
 	}
-	if decoded.APIKey != original.APIKey {
-		t.Errorf("APIKey: got %q, want %q", decoded.APIKey, original.APIKey)
+	if decoded.Seq.APIKey != original.Seq.APIKey {
+		t.Errorf("Seq.APIKey: got %q, want %q", decoded.Seq.APIKey, original.Seq.APIKey)
+	}
+	if decoded.Seq.Enabled != original.Seq.Enabled {
+		t.Errorf("Seq.Enabled: got %v, want %v", decoded.Seq.Enabled, original.Seq.Enabled)
 	}
 	if decoded.UsePartialHash != original.UsePartialHash {
 		t.Errorf("UsePartialHash: got %v, want %v", decoded.UsePartialHash, original.UsePartialHash)
@@ -92,7 +98,7 @@ func TestConfigJSONRoundTrip(t *testing.T) {
 
 func TestConfigJSONFieldNames(t *testing.T) {
 	cfg := Config{
-		ServerURL:      "http://test/",
+		Seq:            SeqConfig{ServerURL: "http://test/"},
 		MaxQueueSize:   5,
 		UsePartialHash: true,
 	}
@@ -108,7 +114,7 @@ func TestConfigJSONFieldNames(t *testing.T) {
 	}
 
 	expectedKeys := []string{
-		"server_url", "api_key", "use_partial_hash", "max_queue_size",
+		"seq", "use_partial_hash", "max_queue_size",
 		"mediainfo_path", "ffmpeg_path", "ffprobe_path", "temp_directory",
 		"video_encoder", "quality_preset", "file_extensions", "log_level",
 	}

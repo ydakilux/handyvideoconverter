@@ -139,7 +139,7 @@ func (b *bufferWriter) Flush(dst io.Writer) error {
 // When nil, output goes to os.Stdout.
 //
 // It returns the logger and a cleanup function that closes the log file.
-func SetupLogging(serverURL, apiKey, logLevel, execDir string, consoleWriter io.Writer) (*logrus.Logger, func()) {
+func SetupLogging(serverURL, apiKey, logLevel, execDir string, seqEnabled bool, consoleWriter io.Writer) (*logrus.Logger, func()) {
 	logger := logrus.New()
 	cleanup := func() {} // no-op default
 
@@ -174,7 +174,7 @@ func SetupLogging(serverURL, apiKey, logLevel, execDir string, consoleWriter io.
 		level = logrus.InfoLevel
 	}
 	logger.SetLevel(level)
-	if serverURL != "" {
+	if serverURL != "" && seqEnabled {
 		hook := NewSeqHook(serverURL, apiKey)
 		logger.AddHook(hook)
 		logger.Debug("Seq logging hook enabled")
@@ -189,7 +189,7 @@ func SetupLogging(serverURL, apiKey, logLevel, execDir string, consoleWriter io.
 //
 // This avoids the "double log file" problem that arises when SetupLogging is
 // called twice: once before the TUI starts (plain stdout) and once after.
-func SetupEarlyLogging(logLevel string) (*logrus.Logger, func(serverURL, apiKey, execDir string, consoleWriter io.Writer) (*logrus.Logger, func())) {
+func SetupEarlyLogging(logLevel string) (*logrus.Logger, func(serverURL, apiKey, execDir string, seqEnabled bool, consoleWriter io.Writer) (*logrus.Logger, func())) {
 	buf := &bufferWriter{}
 	early := logrus.New()
 	early.SetOutput(buf)
@@ -200,11 +200,11 @@ func SetupEarlyLogging(logLevel string) (*logrus.Logger, func(serverURL, apiKey,
 	}
 	early.SetLevel(level)
 
-	flush := func(serverURL, apiKey, execDir string, consoleWriter io.Writer) (*logrus.Logger, func()) {
+	flush := func(serverURL, apiKey, execDir string, seqEnabled bool, consoleWriter io.Writer) (*logrus.Logger, func()) {
 		// Redirect early logger to discard so any lingering calls are silent.
 		early.SetOutput(io.Discard)
 
-		real, cleanup := SetupLogging(serverURL, apiKey, logLevel, execDir, consoleWriter)
+		real, cleanup := SetupLogging(serverURL, apiKey, logLevel, execDir, seqEnabled, consoleWriter)
 
 		// Replay buffered early output into the real logger's output writer.
 		if mw, ok := real.Out.(io.Writer); ok {
