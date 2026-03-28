@@ -8,11 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/sirupsen/logrus"
 
@@ -85,7 +82,7 @@ func (a *App) Run() error {
 	// Phase 1: early logger buffers in memory until the TUI is ready.
 	a.log, a.logFlush = logging.SetupEarlyLogging(a.config.LogLevel)
 
-	ffmpegExe := cfgpkg.ResolveExecutable(a.config.FFmpegPath, "ffmpeg.exe", a.execDir)
+	ffmpegExe := cfgpkg.ResolveExecutable(a.config.FFmpegPath, cfgpkg.ExeName("ffmpeg"), a.execDir)
 	if ffmpegExe == "" {
 		if err := a.promptInstallFFmpeg(); err != nil {
 			return err
@@ -520,33 +517,6 @@ func (a *App) buildStatsSummaryBox(elapsed time.Duration) []string {
 
 // ── interactive prompt helpers ─────────────────────────────────────────────────
 
-func getAvailableDrives() []string {
-	var drives []string
-	for _, drive := range "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
-		drivePath := string(drive) + ":\\"
-		if _, err := os.Stat(drivePath); err == nil {
-			var availBytes, totalBytes, freeBytes uint64
-			kernel32 := syscall.NewLazyDLL("kernel32.dll")
-			getDiskFreeSpaceEx := kernel32.NewProc("GetDiskFreeSpaceExW")
-			driveName, _ := syscall.UTF16PtrFromString(drivePath)
-			ret, _, _ := getDiskFreeSpaceEx.Call(
-				uintptr(unsafe.Pointer(driveName)),
-				uintptr(unsafe.Pointer(&availBytes)),
-				uintptr(unsafe.Pointer(&totalBytes)),
-				uintptr(unsafe.Pointer(&freeBytes)),
-			)
-			if ret != 0 {
-				freeGB := float64(availBytes) / (1024 * 1024 * 1024)
-				totalGB := float64(totalBytes) / (1024 * 1024 * 1024)
-				drives = append(drives, fmt.Sprintf("%s (%.1f GB free / %.1f GB total)", drivePath, freeGB, totalGB))
-			} else {
-				drives = append(drives, drivePath)
-			}
-		}
-	}
-	return drives
-}
-
 // promptInstallFFmpeg informs the user that ffmpeg was not found and offers to
 // open the download page in their browser. It always returns a non-nil error so
 // that Run() exits cleanly after the prompt.
@@ -562,8 +532,7 @@ func (a *App) promptInstallFFmpeg() error {
 
 	fmt.Fprintln(os.Stderr, "Please install ffmpeg and add it to PATH, or set ffmpeg_path in the config file.")
 	if !a.config.NonInteractive {
-		cmd := exec.Command("cmd", "/c", "start", "", downloadURL)
-		if err := cmd.Start(); err != nil {
+		if err := openURL(downloadURL); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to open browser: %v\n", err)
 		}
 	}
@@ -575,8 +544,7 @@ func openHSortedFolders(touchedDrives map[string]bool) {
 	for drive := range touchedDrives {
 		hsortedPath := filepath.Join(drive, "HSORTED")
 		if _, err := os.Stat(hsortedPath); err == nil {
-			cmd := exec.Command("cmd", "/c", "start", "", hsortedPath)
-			cmd.Start() //nolint:errcheck
+			openFolder(hsortedPath) //nolint:errcheck
 		}
 	}
 }

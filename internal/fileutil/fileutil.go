@@ -14,21 +14,24 @@ import (
 	"github.com/zeebo/blake3"
 )
 
-// GetDriveRoot returns the Windows drive root for filePath (e.g. "D:\").
-// Returns "/" for paths with no volume name (relative paths, non-Windows).
+// GetDriveRoot returns the volume root for filePath.
+// On Windows this is the drive root (e.g. "D:\").
+// On Unix it returns "/" for absolute paths; for paths with no volume it also
+// returns "/".
 func GetDriveRoot(filePath string) string {
 	vol := filepath.VolumeName(filePath)
 	if vol == "" {
 		return "/"
 	}
-	return vol + "\\"
+	return vol + string(filepath.Separator)
 }
 
 // GetParentFolderName returns the immediate parent folder name of filePath
 // relative to driveRoot. Returns "ROOT" when the file sits directly on the drive.
 func GetParentFolderName(filePath, driveRoot string) string {
 	dir := filepath.Dir(filePath)
-	if dir == driveRoot || dir == strings.TrimSuffix(driveRoot, "\\") {
+	cleanRoot := filepath.Clean(driveRoot)
+	if filepath.Clean(dir) == cleanRoot {
 		return "ROOT"
 	}
 	return filepath.Base(dir)

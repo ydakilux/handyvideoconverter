@@ -9,42 +9,12 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
 
 	"video-converter/internal/types"
 )
-
-// ntdll procedures for process suspend/resume on Windows.
-var (
-	ntdll             = syscall.NewLazyDLL("ntdll.dll")
-	procNtSuspendProc = ntdll.NewProc("NtSuspendProcess")
-	procNtResumeProc  = ntdll.NewProc("NtResumeProcess")
-)
-
-const processAllAccess = 0x1F0FFF
-
-// suspendProcess suspends all threads of a running process (Windows-only).
-func suspendProcess(pid int) {
-	handle, err := syscall.OpenProcess(processAllAccess, false, uint32(pid))
-	if err != nil {
-		return
-	}
-	defer syscall.CloseHandle(handle)
-	procNtSuspendProc.Call(uintptr(handle)) //nolint:errcheck
-}
-
-// resumeProcess resumes a previously suspended process (Windows-only).
-func resumeProcess(pid int) {
-	handle, err := syscall.OpenProcess(processAllAccess, false, uint32(pid))
-	if err != nil {
-		return
-	}
-	defer syscall.CloseHandle(handle)
-	procNtResumeProc.Call(uintptr(handle)) //nolint:errcheck
-}
 
 // MakeSuspendFn returns a suspend/resume callback for the given *exec.Cmd.
 // Pass true to suspend, false to resume. Safe to call before the process starts
@@ -155,14 +125,6 @@ func Run(ctx context.Context, ffmpegExe string, args []string, filePath string, 
 	}
 
 	return 0, stderrBuf.String()
-}
-
-func killProcess(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
-	kill.Run()
 }
 
 func GetDuration(filePath, ffprobeExe string, logger *logrus.Logger) float64 {

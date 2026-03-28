@@ -14,6 +14,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"video-converter/internal/config"
 	"video-converter/internal/database"
 	"video-converter/internal/encoder"
 	"video-converter/internal/fallback"
@@ -396,7 +397,7 @@ func MoveFile(src, dst string) error {
 // resolveFFmpegExe finds the ffmpeg executable using config path or PATH.
 func resolveFFmpegExe(cfg *types.Config, execDir string) string {
 	if cfg.FFmpegPath == "" {
-		exe, _ := exec.LookPath("ffmpeg.exe")
+		exe, _ := exec.LookPath(config.ExeName("ffmpeg"))
 		return exe
 	}
 	var path string
@@ -408,7 +409,7 @@ func resolveFFmpegExe(cfg *types.Config, execDir string) string {
 	if _, err := os.Stat(path); err == nil {
 		return path
 	}
-	exe, _ := exec.LookPath("ffmpeg.exe")
+	exe, _ := exec.LookPath(config.ExeName("ffmpeg"))
 	return exe
 }
 

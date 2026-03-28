@@ -6,12 +6,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"video-converter/internal/types"
 )
 
 var ValidEncoders = []string{"auto", "hevc_nvenc", "hevc_amf", "hevc_qsv", "libx265"}
+
+// ExeName appends ".exe" to name on Windows, returns name unchanged elsewhere.
+func ExeName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
 
 // legacyConfig captures pre-SeqConfig flat fields so LoadConfig can migrate
 // old JSON files transparently.
@@ -124,8 +133,8 @@ func CreateDefaultConfig(path string) (types.Config, error) {
 		UsePartialHash:     true,
 		MaxQueueSize:       3,
 		MaxParallelJobs:    1,
-		MediaInfoPath:      "MediaInfo_CLI_24.04_Windows_x64\\MediaInfo.exe",
-		FFmpegPath:         "ffmpeg\\bin\\ffmpeg.exe",
+		MediaInfoPath:      defaultMediaInfoPath(),
+		FFmpegPath:         defaultFFmpegPath(),
 		FFprobePath:        "",
 		TempDirectory:      "",
 		VideoEncoder:       "hevc_nvenc",
@@ -141,6 +150,24 @@ func CreateDefaultConfig(path string) (types.Config, error) {
 		return types.Config{}, err
 	}
 	return cfg, nil
+}
+
+// defaultMediaInfoPath returns the platform-appropriate default MediaInfo path.
+// Returns an empty string on non-Windows so the tool falls back to PATH lookup.
+func defaultMediaInfoPath() string {
+	if runtime.GOOS == "windows" {
+		return `MediaInfo_CLI_24.04_Windows_x64\MediaInfo.exe`
+	}
+	return "" // rely on PATH: mediainfo
+}
+
+// defaultFFmpegPath returns the platform-appropriate default ffmpeg path.
+// Returns an empty string on non-Windows so the tool falls back to PATH lookup.
+func defaultFFmpegPath() string {
+	if runtime.GOOS == "windows" {
+		return `ffmpeg\bin\ffmpeg.exe`
+	}
+	return "" // rely on PATH: ffmpeg
 }
 
 // writeConfig serialises cfg to path atomically (write to .tmp then rename).

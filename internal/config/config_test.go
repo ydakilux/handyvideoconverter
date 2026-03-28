@@ -211,11 +211,11 @@ func TestResolveExecutableEmptyPath(t *testing.T) {
 func TestResolveExecutableAbsolutePath(t *testing.T) {
 	// Create a temp file to act as the executable
 	dir := t.TempDir()
-	fakePath := filepath.Join(dir, "ffmpeg.exe")
-	os.WriteFile(fakePath, []byte("fake"), 0755)
+	fakePath := filepath.Join(dir, ExeName("ffmpeg"))
+	os.WriteFile(fakePath, []byte("fake"), 0755) //nolint:errcheck
 
 	// Absolute path should be returned as-is
-	result := ResolveExecutable(fakePath, "ffmpeg.exe", "C:\\irrelevant")
+	result := ResolveExecutable(fakePath, ExeName("ffmpeg"), filepath.Join(dir, "irrelevant"))
 	if result != fakePath {
 		t.Errorf("expected %q, got %q", fakePath, result)
 	}
@@ -225,12 +225,12 @@ func TestResolveExecutableRelativePath(t *testing.T) {
 	// Create a temp "execDir" with a relative file
 	dir := t.TempDir()
 	subDir := filepath.Join(dir, "bin")
-	os.MkdirAll(subDir, 0755)
-	fakePath := filepath.Join(subDir, "ffmpeg.exe")
-	os.WriteFile(fakePath, []byte("fake"), 0755)
+	os.MkdirAll(subDir, 0755) //nolint:errcheck
+	fakePath := filepath.Join(subDir, ExeName("ffmpeg"))
+	os.WriteFile(fakePath, []byte("fake"), 0755) //nolint:errcheck
 
 	// Relative path should be joined with execDir
-	result := ResolveExecutable(filepath.Join("bin", "ffmpeg.exe"), "ffmpeg.exe", dir)
+	result := ResolveExecutable(filepath.Join("bin", ExeName("ffmpeg")), ExeName("ffmpeg"), dir)
 	if result != fakePath {
 		t.Errorf("expected %q, got %q", fakePath, result)
 	}

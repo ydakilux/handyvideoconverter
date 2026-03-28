@@ -187,12 +187,12 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 // resolveFFprobeExe finds the ffprobe executable from config or by locating it
 // beside ffmpeg.
 func resolveFFprobeExe(cfg *types.Config, execDir string) string {
-	ffprobeExe := cfgpkg.ResolveExecutable(cfg.FFprobePath, "ffprobe.exe", execDir)
+	ffprobeExe := cfgpkg.ResolveExecutable(cfg.FFprobePath, cfgpkg.ExeName("ffprobe"), execDir)
 	if ffprobeExe == "" {
-		ffmpegExe := cfgpkg.ResolveExecutable(cfg.FFmpegPath, "ffmpeg.exe", execDir)
-		ffprobeExe = filepath.Join(filepath.Dir(ffmpegExe), "ffprobe.exe")
+		ffmpegExe := cfgpkg.ResolveExecutable(cfg.FFmpegPath, cfgpkg.ExeName("ffmpeg"), execDir)
+		ffprobeExe = filepath.Join(filepath.Dir(ffmpegExe), cfgpkg.ExeName("ffprobe"))
 		if _, err := os.Stat(ffprobeExe); err != nil {
-			ffprobeExe, _ = exec.LookPath("ffprobe.exe")
+			ffprobeExe, _ = exec.LookPath(cfgpkg.ExeName("ffprobe"))
 		}
 	}
 	return ffprobeExe
