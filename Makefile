@@ -8,19 +8,27 @@
 # Variables
 # ──────────────────────────────────────────────────────────────────
 BINARY_WIN       := video-converter.exe
-BINARY_LINUX     := video-converter
+BINARY_LINUX     := video-converter-linux
+BINARY_DARWIN    := video-converter-darwin
 BENCHMARK_WIN    := benchmark.exe
-BENCHMARK_LINUX  := benchmark
+BENCHMARK_LINUX  := benchmark-linux
+BENCHMARK_DARWIN := benchmark-darwin
 LDFLAGS          := -s -w
 COVERAGE         := coverage.out
 
-# Detect if running under WSL or Linux to set default binary name
+# Native binary name — auto-detected from OS
 ifeq ($(OS),Windows_NT)
-  BINARY_NAME    := $(BINARY_WIN)
-  BENCHMARK_NAME := $(BENCHMARK_WIN)
+  BINARY_NAME    := video-converter.exe
+  BENCHMARK_NAME := benchmark.exe
 else
-  BINARY_NAME    := $(BINARY_LINUX)
-  BENCHMARK_NAME := $(BENCHMARK_LINUX)
+  UNAME_S := $(shell uname -s)
+  ifeq ($(UNAME_S),Darwin)
+    BINARY_NAME    := video-converter
+    BENCHMARK_NAME := benchmark
+  else
+    BINARY_NAME    := video-converter
+    BENCHMARK_NAME := benchmark
+  endif
 endif
 
 # ──────────────────────────────────────────────────────────────────
@@ -28,9 +36,12 @@ endif
 # ──────────────────────────────────────────────────────────────────
 .DEFAULT_GOAL := all
 
-.PHONY: all build build-windows build-linux build-wsl build-all release release-windows release-linux release-all \
-        benchmark benchmark-windows benchmark-linux benchmark-all \
-        test test-verbose test-race test-short test-cover cover cover-html fmt vet lint tidy clean help
+.PHONY: all \
+        build build-windows build-linux build-darwin build-all \
+        release release-windows release-linux release-darwin release-all \
+        benchmark benchmark-windows benchmark-linux benchmark-darwin benchmark-all \
+        test test-verbose test-race test-short test-cover cover cover-html \
+        fmt vet lint tidy clean help
 
 all: lint test build  ## Run lint + test + build (auto-detects OS)
 
@@ -38,28 +49,41 @@ all: lint test build  ## Run lint + test + build (auto-detects OS)
 # Build
 # ──────────────────────────────────────────────────────────────────
 build:  ## Development build for current OS
-	go build -o $(BINARY_NAME)
+	go build -o $(BINARY_NAME) .
 
 build-windows:  ## Development build for Windows
-	GOOS=windows GOARCH=amd64 go build -o $(BINARY_WIN)
+	GOOS=windows GOARCH=amd64 go build -o $(BINARY_WIN) .
 
-build-linux:  ## Development build for Linux / WSL
-	GOOS=linux GOARCH=amd64 go build -o $(BINARY_LINUX)
+build-linux:  ## Development build for Linux
+	GOOS=linux GOARCH=amd64 go build -o $(BINARY_LINUX) .
 
-build-wsl: build-linux  ## Alias: development build for WSL (same as build-linux)
+build-darwin:  ## Development build for macOS
+	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_DARWIN) .
 
-build-all: build-windows build-linux  ## Development build for all platforms
+build-darwin-arm:  ## Development build for macOS Apple Silicon
+	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_DARWIN)-arm64 .
 
+build-all: build-windows build-linux build-darwin  ## Development build for all platforms
+
+# ──────────────────────────────────────────────────────────────────
+# Release (optimised, stripped)
+# ──────────────────────────────────────────────────────────────────
 release:  ## Production build for current OS (stripped symbols, smaller binary)
-	go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)
+	go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) .
 
 release-windows:  ## Production build for Windows
-	GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_WIN)
+	GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_WIN) .
 
-release-linux:  ## Production build for Linux / WSL
-	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_LINUX)
+release-linux:  ## Production build for Linux
+	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_LINUX) .
 
-release-all: release-windows release-linux  ## Production build for all platforms
+release-darwin:  ## Production build for macOS (Intel)
+	GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_DARWIN) .
+
+release-darwin-arm:  ## Production build for macOS Apple Silicon
+	GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_DARWIN)-arm64 .
+
+release-all: release-windows release-linux release-darwin release-darwin-arm  ## Production build for all platforms
 
 # ──────────────────────────────────────────────────────────────────
 # Benchmark tool
@@ -70,16 +94,19 @@ benchmark:  ## Build benchmark tool for current OS
 benchmark-windows:  ## Build benchmark tool for Windows
 	GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BENCHMARK_WIN) ./cmd/benchmark
 
-benchmark-linux:  ## Build benchmark tool for Linux / WSL
+benchmark-linux:  ## Build benchmark tool for Linux
 	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BENCHMARK_LINUX) ./cmd/benchmark
 
-benchmark-all: benchmark-windows benchmark-linux  ## Build benchmark tool for all platforms
+benchmark-darwin:  ## Build benchmark tool for macOS (Intel)
+	GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BENCHMARK_DARWIN) ./cmd/benchmark
+
+benchmark-all: benchmark-windows benchmark-linux benchmark-darwin  ## Build benchmark tool for all platforms
 
 # ──────────────────────────────────────────────────────────────────
 # Test
 # ──────────────────────────────────────────────────────────────────
 test:  ## Run all tests
-	go test ./...
+	go test ./... -count=1 -timeout 120s
 
 test-verbose:  ## Run tests with verbose output
 	go test -v ./...
@@ -100,6 +127,15 @@ cover:  ## Generate coverage report and open in browser
 cover-html: cover  ## Alias for cover (generate HTML report)
 
 # ──────────────────────────────────────────────────────────────────
+# Cross-compile check (build only, no run)
+# ──────────────────────────────────────────────────────────────────
+build-check:  ## Verify the code compiles for Windows, Linux and macOS
+	GOOS=windows GOARCH=amd64 go build ./...
+	GOOS=linux   GOARCH=amd64 go build ./...
+	GOOS=darwin  GOARCH=amd64 go build ./...
+	@echo "build-check: all platforms OK"
+
+# ──────────────────────────────────────────────────────────────────
 # Code quality
 # ──────────────────────────────────────────────────────────────────
 fmt:  ## Format code
@@ -118,49 +154,17 @@ tidy:  ## Tidy and verify module dependencies
 	go mod verify
 
 # ──────────────────────────────────────────────────────────────────
-# Cleanup
+# Cleanup (cross-platform: rm -f works on Linux/macOS/WSL/Git-Bash)
 # ──────────────────────────────────────────────────────────────────
 clean:  ## Remove build artifacts and coverage files
 	go clean
-	-del /Q $(BINARY_WIN) 2>nul
-	-rm -f $(BINARY_LINUX)
-	-del /Q $(BENCHMARK_WIN) 2>nul
-	-rm -f $(BENCHMARK_LINUX)
-	-del /Q $(COVERAGE) 2>nul
-	-rm -f $(COVERAGE)
+	rm -f $(BINARY_WIN) $(BINARY_LINUX) $(BINARY_DARWIN) $(BINARY_DARWIN)-arm64
+	rm -f $(BENCHMARK_WIN) $(BENCHMARK_LINUX) $(BENCHMARK_DARWIN)
+	rm -f $(COVERAGE)
 
 # ──────────────────────────────────────────────────────────────────
 # Help
 # ──────────────────────────────────────────────────────────────────
 help:  ## Print available targets with descriptions
-	@echo.
-	@echo Available targets:
-	@echo.
-	@echo   make all              Run lint + test + build for current OS (default)
-	@echo   make build            Development build for current OS
-	@echo   make build-windows    Development build for Windows (.exe)
-	@echo   make build-linux      Development build for Linux
-	@echo   make build-wsl        Alias for build-linux (WSL)
-	@echo   make build-all        Development build for all platforms
-	@echo   make release          Production build for current OS (stripped symbols)
-	@echo   make release-windows  Production build for Windows
-	@echo   make release-linux    Production build for Linux / WSL
-	@echo   make release-all      Production build for all platforms
-	@echo   make benchmark        Build benchmark tool for current OS
-	@echo   make benchmark-windows Build benchmark tool for Windows
-	@echo   make benchmark-linux  Build benchmark tool for Linux / WSL
-	@echo   make benchmark-all    Build benchmark tool for all platforms
-	@echo   make test             Run all tests
-	@echo   make test-verbose     Run tests with verbose output
-	@echo   make test-race        Run tests with race detector
-	@echo   make test-short       Run only fast unit tests (no ffmpeg/GPU required)
-	@echo   make test-cover       Run tests and print per-package coverage summary
-	@echo   make cover            Generate coverage report (opens browser)
-	@echo   make cover-html       Alias for cover
-	@echo   make fmt              Format code
-	@echo   make vet              Run static analysis
-	@echo   make lint             Run fmt + vet
-	@echo   make tidy             Tidy and verify module dependencies
-	@echo   make clean            Remove build artifacts and coverage files
-	@echo   make help             Print this help message
-	@echo.
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-28s %s\n", $$1, $$2}'

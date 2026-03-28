@@ -326,7 +326,20 @@ func TestGetDriveRoot(t *testing.T) {
 				t.Errorf("GetDriveRoot(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		}
+	} else {
+		// On Unix filepath.VolumeName always returns ""; all paths return "/".
+		for _, input := range []string{
+			"/mnt/videos/foo.mp4",
+			"/home/user/file.mkv",
+			"/",
+		} {
+			got := fileutil.GetDriveRoot(input)
+			if got != "/" {
+				t.Errorf("GetDriveRoot(%q) = %q, want \"/\"", input, got)
+			}
+		}
 	}
+	// Shared: empty and relative paths always return "/".
 	if got := fileutil.GetDriveRoot(""); got != "/" {
 		t.Errorf("GetDriveRoot(\"\") = %q, want \"/\"", got)
 	}
@@ -340,23 +353,39 @@ func TestGetDriveRoot(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetParentFolderName(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("path tests use Windows separators")
-	}
-	tests := []struct {
-		filePath  string
-		driveRoot string
-		want      string
-	}{
-		{`C:\Videos\movie.mp4`, `C:\`, "Videos"},
-		{`C:\movie.mp4`, `C:\`, "ROOT"},
-		{`C:\A\B\movie.mp4`, `C:\`, "B"},
-		{`D:\Foo\file.mkv`, `D:\`, "Foo"},
-	}
-	for _, tc := range tests {
-		got := fileutil.GetParentFolderName(tc.filePath, tc.driveRoot)
-		if got != tc.want {
-			t.Errorf("GetParentFolderName(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+	if runtime.GOOS == "windows" {
+		tests := []struct {
+			filePath  string
+			driveRoot string
+			want      string
+		}{
+			{`C:\Videos\movie.mp4`, `C:\`, "Videos"},
+			{`C:\movie.mp4`, `C:\`, "ROOT"},
+			{`C:\A\B\movie.mp4`, `C:\`, "B"},
+			{`D:\Foo\file.mkv`, `D:\`, "Foo"},
+		}
+		for _, tc := range tests {
+			got := fileutil.GetParentFolderName(tc.filePath, tc.driveRoot)
+			if got != tc.want {
+				t.Errorf("GetParentFolderName(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+			}
+		}
+	} else {
+		tests := []struct {
+			filePath  string
+			driveRoot string
+			want      string
+		}{
+			{"/mnt/videos/movie.mp4", "/mnt/videos", "ROOT"},
+			{"/mnt/videos/sub/movie.mp4", "/mnt/videos", "sub"},
+			{"/home/user/a/b/movie.mp4", "/home/user", "b"},
+			{"/media/disk/Foo/file.mkv", "/media/disk", "Foo"},
+		}
+		for _, tc := range tests {
+			got := fileutil.GetParentFolderName(tc.filePath, tc.driveRoot)
+			if got != tc.want {
+				t.Errorf("GetParentFolderName(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+			}
 		}
 	}
 }
@@ -366,22 +395,37 @@ func TestGetParentFolderName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetRelativePath(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("path tests use Windows separators")
-	}
-	tests := []struct {
-		filePath  string
-		driveRoot string
-		want      string
-	}{
-		{`C:\Videos\foo.mp4`, `C:\`, "Videos"},
-		{`C:\foo.mp4`, `C:\`, "ROOT"},
-		{`C:\A\B\foo.mp4`, `C:\`, `A\B`},
-	}
-	for _, tc := range tests {
-		got := fileutil.GetRelativePath(tc.filePath, tc.driveRoot)
-		if got != tc.want {
-			t.Errorf("GetRelativePath(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+	if runtime.GOOS == "windows" {
+		tests := []struct {
+			filePath  string
+			driveRoot string
+			want      string
+		}{
+			{`C:\Videos\foo.mp4`, `C:\`, "Videos"},
+			{`C:\foo.mp4`, `C:\`, "ROOT"},
+			{`C:\A\B\foo.mp4`, `C:\`, `A\B`},
+		}
+		for _, tc := range tests {
+			got := fileutil.GetRelativePath(tc.filePath, tc.driveRoot)
+			if got != tc.want {
+				t.Errorf("GetRelativePath(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+			}
+		}
+	} else {
+		tests := []struct {
+			filePath  string
+			driveRoot string
+			want      string
+		}{
+			{"/mnt/videos/foo.mp4", "/mnt/videos", "ROOT"},
+			{"/mnt/videos/sub/foo.mp4", "/mnt/videos", "sub"},
+			{"/home/user/a/b/foo.mp4", "/home/user", filepath.Join("a", "b")},
+		}
+		for _, tc := range tests {
+			got := fileutil.GetRelativePath(tc.filePath, tc.driveRoot)
+			if got != tc.want {
+				t.Errorf("GetRelativePath(%q, %q) = %q, want %q", tc.filePath, tc.driveRoot, got, tc.want)
+			}
 		}
 	}
 }
