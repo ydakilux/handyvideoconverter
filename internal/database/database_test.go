@@ -113,7 +113,7 @@ func TestSaveLoadPersistence(t *testing.T) {
 	dm1.SaveAll()
 
 	// Verify file exists on disk
-	dbPath := filepath.Join(driveRoot, "converted_files.json")
+	dbPath := filepath.Join(driveRoot, CacheFileName)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		t.Fatal("converted_files.json was not created")
 	}
@@ -236,7 +236,7 @@ func TestConcurrentUpdateAndSave(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		driveDir := filepath.Join(tmpDir, "drive_"+string(rune('a'+i)))
 		driveRoot := driveDir + string(filepath.Separator)
-		dbPath := filepath.Join(driveRoot, "converted_files.json")
+		dbPath := filepath.Join(driveRoot, CacheFileName)
 		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 			t.Errorf("converted_files.json not found for drive_%c", rune('a'+i))
 		}
@@ -268,7 +268,7 @@ func TestLoadDBCorruptedJSON(t *testing.T) {
 	driveRoot := tmpDir + string(filepath.Separator)
 
 	// Write corrupted JSON
-	dbPath := filepath.Join(driveRoot, "converted_files.json")
+	dbPath := filepath.Join(driveRoot, CacheFileName)
 	os.WriteFile(dbPath, []byte("not valid json{{{"), 0644)
 
 	dm := NewDatabaseManager(newTestLogger())
@@ -292,8 +292,8 @@ func TestFallbackDBPath(t *testing.T) {
 	if !strings.Contains(result, string(filepath.Separator)+"C"+string(filepath.Separator)) {
 		t.Errorf("expected path to contain drive letter 'C', got %q", result)
 	}
-	if !strings.HasSuffix(result, "converted_files.json") {
-		t.Errorf("expected path to end with converted_files.json, got %q", result)
+	if !strings.HasSuffix(result, CacheFileName) {
+		t.Errorf("expected path to end with %s, got %q", CacheFileName, result)
 	}
 
 	// Test that empty volume name returns empty

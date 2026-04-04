@@ -3,6 +3,10 @@
 // the correct FFmpeg quality/device arguments for its codec.
 package encoder
 
+import "time"
+
+const TrialEncodeTimeout = 10 * time.Second
+
 // Encoder abstracts a video encoder's FFmpeg argument generation and availability probing.
 type Encoder interface {
 	// Name returns the FFmpeg codec name, e.g. "libx265", "hevc_nvenc".

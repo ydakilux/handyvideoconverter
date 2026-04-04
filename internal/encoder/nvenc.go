@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 )
 
 var nvencCQTable = qualityTable{
@@ -36,7 +35,7 @@ func (e *NvencEncoder) DeviceArgs(gpuIndex int) []string {
 }
 
 func (e *NvencEncoder) IsAvailable(ffmpegPath string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), TrialEncodeTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, ffmpegPath,

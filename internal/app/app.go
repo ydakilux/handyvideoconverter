@@ -28,7 +28,10 @@ import (
 	"video-converter/internal/types"
 )
 
+const MaxParallelJobsCap = 8
+
 // Options holds the parsed CLI flags.
+
 type Options struct {
 	ConfigFile     string
 	DryRun         bool
@@ -187,8 +190,8 @@ func (a *App) Run() error {
 	if answers.ParallelJobs > 0 {
 		a.config.MaxParallelJobs = answers.ParallelJobs
 	} else if a.opts.ParallelJobs > 0 {
-		if a.opts.ParallelJobs > 8 {
-			a.opts.ParallelJobs = 8
+		if a.opts.ParallelJobs > MaxParallelJobsCap {
+			a.opts.ParallelJobs = MaxParallelJobsCap
 		}
 		a.config.MaxParallelJobs = a.opts.ParallelJobs
 	}
@@ -542,7 +545,7 @@ func (a *App) promptInstallFFmpeg() error {
 
 func openHSortedFolders(touchedDrives map[string]bool) {
 	for drive := range touchedDrives {
-		hsortedPath := filepath.Join(drive, "HSORTED")
+		hsortedPath := filepath.Join(drive, converter.OutputDirName)
 		if _, err := os.Stat(hsortedPath); err == nil {
 			openFolder(hsortedPath) //nolint:errcheck
 		}

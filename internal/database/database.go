@@ -12,6 +12,8 @@ import (
 	"video-converter/internal/types"
 )
 
+const CacheFileName = "converted_files.json"
+
 // DatabaseManager manages per-drive cache files with thread-safe access.
 // Uses sync.Mutex (not RWMutex) to avoid lock promotion races in GetRecord.
 type DatabaseManager struct {
@@ -67,12 +69,12 @@ func fallbackDBPath(driveRoot string) string {
 	if letter == "" {
 		return ""
 	}
-	return filepath.Join(cacheDir, "video-converter", letter, "converted_files.json")
+	return filepath.Join(cacheDir, "video-converter", letter, CacheFileName)
 }
 
 // loadDB reads the cache file for a drive. Must be called while holding db.mu.
 func (db *DatabaseManager) loadDB(driveRoot string) {
-	dbPath := filepath.Join(driveRoot, "converted_files.json")
+	dbPath := filepath.Join(driveRoot, CacheFileName)
 	data, err := os.ReadFile(dbPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -113,7 +115,7 @@ func (db *DatabaseManager) SaveAll() {
 			continue
 		}
 
-		dbPath := filepath.Join(driveRoot, "converted_files.json")
+		dbPath := filepath.Join(driveRoot, CacheFileName)
 		tmpPath := dbPath + ".tmp"
 
 		data, err := json.MarshalIndent(db.dbs[driveRoot], "", "  ")

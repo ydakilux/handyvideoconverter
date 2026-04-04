@@ -16,6 +16,11 @@ import (
 	"video-converter/internal/types"
 )
 
+const (
+	ExitCodeInternal = 999
+	FFprobeTimeout   = 30 * time.Second
+)
+
 // MakeSuspendFn returns a suspend/resume callback for the given *exec.Cmd.
 // Pass true to suspend, false to resume. Safe to call before the process starts
 // (it checks cmd.Process for nil).
@@ -42,18 +47,18 @@ func Run(ctx context.Context, ffmpegExe string, args []string, filePath string, 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		logger.Errorf("Failed to create stdout pipe: %v", err)
-		return 999, ""
+		return ExitCodeInternal, ""
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		logger.Errorf("Failed to create stderr pipe: %v", err)
-		return 999, ""
+		return ExitCodeInternal, ""
 	}
 
 	if err := cmd.Start(); err != nil {
 		logger.Errorf("Failed to start FFmpeg: %v", err)
-		return 999, ""
+		return ExitCodeInternal, ""
 	}
 
 	// Register suspend/resume callback now that the process is running.
@@ -121,7 +126,7 @@ func Run(ctx context.Context, ffmpegExe string, args []string, filePath string, 
 			return exitErr.ExitCode(), stderrStr
 		}
 		killProcess(cmd)
-		return 999, stderrStr
+		return ExitCodeInternal, stderrStr
 	}
 
 	return 0, stderrBuf.String()
@@ -132,7 +137,7 @@ func GetDuration(filePath, ffprobeExe string, logger *logrus.Logger) float64 {
 		return 0.0
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), FFprobeTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, ffprobeExe, "-v", "error", "-show_entries", "format=duration", "-of", "json", filePath)
@@ -159,7 +164,7 @@ func GetDuration(filePath, ffprobeExe string, logger *logrus.Logger) float64 {
 // returns a VideoInfo struct populated with codec, geometry, HDR colour
 // metadata, and per-stream audio/subtitle details.
 func GetMediaInfo(filePath, ffprobeExe string) (*types.VideoInfo, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), FFprobeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobeExe,
 		"-v", "quiet",
