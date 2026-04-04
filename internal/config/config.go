@@ -12,7 +12,11 @@ import (
 	"video-converter/internal/types"
 )
 
-var ValidEncoders = []string{"auto", "hevc_nvenc", "hevc_amf", "hevc_qsv", "libx265"}
+// ValidEncoders returns the list of accepted encoder names.
+// Returned as a fresh slice so callers cannot mutate the canonical list.
+func ValidEncoders() []string {
+	return []string{"auto", "hevc_nvenc", "hevc_amf", "hevc_qsv", "libx265"}
+}
 
 // ExeName appends ".exe" to name on Windows, returns name unchanged elsewhere.
 func ExeName(name string) string {
@@ -187,12 +191,12 @@ func ValidateEncoder(encoder string) error {
 	if encoder == "" {
 		return nil
 	}
-	for _, valid := range ValidEncoders {
+	for _, valid := range ValidEncoders() {
 		if encoder == valid {
 			return nil
 		}
 	}
-	return fmt.Errorf("invalid video encoder %q; valid options: %s", encoder, strings.Join(ValidEncoders, ", "))
+	return fmt.Errorf("invalid video encoder %q; valid options: %s", encoder, strings.Join(ValidEncoders(), ", "))
 }
 
 // ResolveExecutable resolves the path to an executable. It first checks the

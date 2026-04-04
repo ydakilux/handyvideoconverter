@@ -188,7 +188,7 @@ func TestInvalidEncoderRejected(t *testing.T) {
 }
 
 func TestValidateEncoderAllValid(t *testing.T) {
-	for _, enc := range ValidEncoders {
+	for _, enc := range ValidEncoders() {
 		if err := ValidateEncoder(enc); err != nil {
 			t.Errorf("ValidateEncoder(%q) should succeed, got: %v", enc, err)
 		}
