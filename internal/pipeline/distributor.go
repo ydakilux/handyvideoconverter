@@ -7,6 +7,7 @@ import (
 )
 
 // Distributor assigns GPU indices to jobs proportional to measured GPU speeds.
+// NOTE: not yet wired into the production pipeline; reserved for future multi-GPU distribution.
 type Distributor struct{}
 
 // NewDistributor creates a new Distributor.

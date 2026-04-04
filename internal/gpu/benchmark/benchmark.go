@@ -27,6 +27,8 @@ const (
 	runsPerEncoder    = 3
 )
 
+// cpuEncoders lists encoders that should be skipped during GPU benchmarks.
+// Used by RunFullBenchmark which is reserved for future multi-encoder comparison.
 var cpuEncoders = map[string]bool{
 	"libx265": true,
 	"libx264": true,
@@ -242,6 +244,8 @@ func RunParallelSweep(ffmpegPath, encoder string, maxParallel int, qualityArgs [
 	return result, nil
 }
 
+// RunFullBenchmark benchmarks all available GPU encoders with warm-up runs.
+// Reserved for future multi-encoder comparison; currently only exercised by tests.
 func RunFullBenchmark(ffmpegPath string, encoders []detect.GPUInfo, qualityArgs map[string][]string, logger *logrus.Logger) ([]BenchmarkResult, error) {
 	var results []BenchmarkResult
 
