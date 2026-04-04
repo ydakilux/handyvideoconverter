@@ -72,6 +72,7 @@ type ProducerConfig struct {
 	Stats       *types.Stats
 	FFprobePath string // resolved ffprobe path (may be empty → resolves from ffmpeg dir)
 	Log         *logrus.Logger
+	GPUAssigner *pipeline.GPUAssigner
 }
 
 // Produce analyses files, filters already-processed ones, and submits Jobs to
@@ -178,6 +179,7 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 				FolderNumber:    folderNumber,
 				TotalFolders:    totalFolders,
 				VideoInfo:       videoInfo,
+				GPUIndex:        cfg.GPUAssigner.Next(),
 			}
 			pipe.Submit(job) //nolint:errcheck
 		}

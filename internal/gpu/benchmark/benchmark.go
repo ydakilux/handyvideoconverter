@@ -75,7 +75,7 @@ func ParallelCacheKey(encoderName string) string {
 	return fmt.Sprintf("%x", hash[:16])
 }
 
-func RunBenchmark(ffmpegPath string, encoder string, gpuIndex int, qualityArgs []string, logger *logrus.Logger) (*BenchmarkResult, error) {
+func RunBenchmark(ffmpegPath string, encoder string, gpuIndex int, qualityArgs []string, logger *logrus.Logger, deviceArgs ...[]string) (*BenchmarkResult, error) {
 	if ffmpegPath == "" {
 		return nil, fmt.Errorf("ffmpeg not found — check ffmpeg_path in config or add ffmpeg to PATH")
 	}
@@ -87,6 +87,9 @@ func RunBenchmark(ffmpegPath string, encoder string, gpuIndex int, qualityArgs [
 		"-f", "lavfi",
 		"-i", fmt.Sprintf("testsrc=duration=%d:size=%dx%d:rate=%d", benchmarkDuration, benchmarkWidth, benchmarkHeight, benchmarkRate),
 		"-c:v", encoder,
+	}
+	if len(deviceArgs) > 0 && len(deviceArgs[0]) > 0 {
+		args = append(args, deviceArgs[0]...)
 	}
 	args = append(args, qualityArgs...)
 	args = append(args, "-f", "null", "-")

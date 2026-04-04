@@ -22,6 +22,7 @@ import (
 	"video-converter/internal/fileutil"
 	"video-converter/internal/gpu/benchmark"
 	"video-converter/internal/gpu/detect"
+	"video-converter/internal/gpu/nvidia"
 	"video-converter/internal/logging"
 	"video-converter/internal/pipeline"
 	"video-converter/internal/tui"
@@ -61,7 +62,8 @@ type App struct {
 	fbManager       *fallback.FallbackManager
 	ui              *tui.UI
 	pipelineCtrl    *pipeline.Controller
-	outputDrive     string // "" = use source drive
+	outputDrive     string          // "" = use source drive
+	gpuBenchmarks   map[int]float64 // gpuIndex → FPS (nil for single-GPU or CPU)
 }
 
 // New creates an App from parsed options and validates basic preconditions.
@@ -229,6 +231,18 @@ func (a *App) Run() error {
 	if numWorkers < 1 {
 		numWorkers = 1
 	}
+
+	gpuAssigner := pipeline.NewGPUAssigner(a.gpuBenchmarks)
+	if gpuAssigner != nil && gpuAssigner.NumGPUs() > 1 {
+		numWorkers = gpuAssigner.NumGPUs() * a.config.MaxEncodesPerGPU
+		if numWorkers > MaxParallelJobsCap {
+			numWorkers = MaxParallelJobsCap
+		}
+		if numWorkers < 1 {
+			numWorkers = 1
+		}
+		a.log.Infof("Multi-GPU: %d GPUs × %d encodes/GPU = %d workers", gpuAssigner.NumGPUs(), a.config.MaxEncodesPerGPU, numWorkers)
+	}
 	bufSize := numWorkers * 2
 	if a.config.MaxQueueSize > bufSize {
 		bufSize = a.config.MaxQueueSize
@@ -267,11 +281,12 @@ func (a *App) Run() error {
 
 	go func() {
 		discovery.Produce(files, fileToBaseDir, pipe, bypass, forceHevc, discovery.ProducerConfig{
-			Config:    &a.config,
-			ExecDir:   a.execDir,
-			DBManager: a.dbManager,
-			Stats:     &a.stats,
-			Log:       a.log,
+			Config:      &a.config,
+			ExecDir:     a.execDir,
+			DBManager:   a.dbManager,
+			Stats:       &a.stats,
+			Log:         a.log,
+			GPUAssigner: gpuAssigner,
 		})
 	}()
 
@@ -383,9 +398,6 @@ func (a *App) runBenchmarks(ffmpegExe string) error {
 	}
 
 	qualityArgs := a.selectedEncoder.QualityArgs(a.config.QualityPreset, 1920)
-	singleKey := benchmark.CacheKey(a.config.VideoEncoder, "", "")
-	parallelKey := benchmark.ParallelCacheKey(a.config.VideoEncoder)
-
 	cache, _ := benchmark.LoadCache(a.configFilePath)
 	if cache == nil {
 		cache = &benchmark.BenchmarkCache{
@@ -395,36 +407,81 @@ func (a *App) runBenchmarks(ffmpegExe string) error {
 		}
 	}
 
-	if a.config.Rebenchmark || !benchmark.IsCacheValid(cache, singleKey) {
-		a.log.Info("Running GPU benchmark (single stream)...")
-		result, err := benchmark.RunBenchmark(ffmpegExe, a.config.VideoEncoder, 0, qualityArgs, a.log)
-		if err != nil {
-			a.log.Warnf("Benchmark failed: %v — proceeding without speed data", err)
-		} else {
-			a.log.Infof("Benchmark: %s @ %.1f FPS (%.2fx realtime)", a.config.VideoEncoder, result.FPS, result.SpeedX)
-			result.CacheKey = singleKey
-			cache.Results[singleKey] = *result
+	// Multi-GPU: enumerate NVIDIA GPUs and benchmark each one individually.
+	if a.config.VideoEncoder == "hevc_nvenc" {
+		gpus, err := nvidia.QueryGPUs(a.log)
+		if err == nil && len(gpus) > 1 {
+			a.log.Infof("Detected %d NVIDIA GPUs — benchmarking each", len(gpus))
+			a.gpuBenchmarks = make(map[int]float64, len(gpus))
+
+			for _, gpu := range gpus {
+				deviceArgs := a.selectedEncoder.DeviceArgs(gpu.Index)
+				key := benchmark.CacheKey(a.config.VideoEncoder, gpu.Name, "")
+
+				if !a.config.Rebenchmark && benchmark.IsCacheValid(cache, key) {
+					cached := cache.Results[key]
+					a.log.Infof("Using cached benchmark for GPU %d (%s): %.1f FPS", gpu.Index, gpu.Name, cached.FPS)
+					a.gpuBenchmarks[gpu.Index] = cached.FPS
+					continue
+				}
+
+				a.log.Infof("Benchmarking GPU %d (%s, %d MB VRAM)...", gpu.Index, gpu.Name, gpu.VRAMTotalMB)
+				result, err := benchmark.RunBenchmark(ffmpegExe, a.config.VideoEncoder, gpu.Index, qualityArgs, a.log, deviceArgs)
+				if err != nil {
+					a.log.Warnf("Benchmark failed for GPU %d (%s): %v — skipping this GPU", gpu.Index, gpu.Name, err)
+					continue
+				}
+				a.log.Infof("GPU %d (%s): %.1f FPS (%.2fx realtime)", gpu.Index, gpu.Name, result.FPS, result.SpeedX)
+				result.CacheKey = key
+				cache.Results[key] = *result
+				a.gpuBenchmarks[gpu.Index] = result.FPS
+			}
+
+			if len(a.gpuBenchmarks) == 0 {
+				a.log.Warn("All GPU benchmarks failed — falling back to single-GPU mode")
+				a.gpuBenchmarks = nil
+			}
 		}
-	} else {
-		cached := cache.Results[singleKey]
-		a.log.Infof("Using cached benchmark: %.1f FPS for %s", cached.FPS, a.config.VideoEncoder)
 	}
 
-	if a.config.Rebenchmark || !benchmark.IsParallelCacheValid(cache, parallelKey) {
-		a.log.Info("Running parallel performance sweep (this takes ~2 minutes)...")
-		sweepResult, err := benchmark.RunParallelSweep(ffmpegExe, a.config.VideoEncoder, 4, qualityArgs, a.log)
-		if err != nil {
-			a.log.Warnf("Parallel sweep failed: %v — keeping current parallel setting", err)
+	// Single-GPU / non-NVENC benchmark (also runs when multi-GPU detection found only 1 GPU).
+	singleKey := benchmark.CacheKey(a.config.VideoEncoder, "", "")
+	if a.gpuBenchmarks == nil {
+		if a.config.Rebenchmark || !benchmark.IsCacheValid(cache, singleKey) {
+			a.log.Info("Running GPU benchmark (single stream)...")
+			result, err := benchmark.RunBenchmark(ffmpegExe, a.config.VideoEncoder, 0, qualityArgs, a.log)
+			if err != nil {
+				a.log.Warnf("Benchmark failed: %v — proceeding without speed data", err)
+			} else {
+				a.log.Infof("Benchmark: %s @ %.1f FPS (%.2fx realtime)", a.config.VideoEncoder, result.FPS, result.SpeedX)
+				result.CacheKey = singleKey
+				cache.Results[singleKey] = *result
+			}
 		} else {
-			cache.ParallelResults[parallelKey] = *sweepResult
-			a.config.MaxParallelJobs = sweepResult.BestParallelism
-			a.log.Infof("Auto-configured: %d parallel job(s) gives best throughput (%.1f FPS)", sweepResult.BestParallelism, sweepResult.BestFPS)
+			cached := cache.Results[singleKey]
+			a.log.Infof("Using cached benchmark: %.1f FPS for %s", cached.FPS, a.config.VideoEncoder)
 		}
-	} else {
-		cached := cache.ParallelResults[parallelKey]
-		a.log.Infof("Using cached parallel sweep: best = %d job(s) @ %.1f FPS", cached.BestParallelism, cached.BestFPS)
-		if a.config.MaxParallelJobs <= 1 {
-			a.config.MaxParallelJobs = cached.BestParallelism
+	}
+
+	// Parallel sweep (single-GPU only — multi-GPU uses per-GPU benchmarks for worker count).
+	if a.gpuBenchmarks == nil {
+		parallelKey := benchmark.ParallelCacheKey(a.config.VideoEncoder)
+		if a.config.Rebenchmark || !benchmark.IsParallelCacheValid(cache, parallelKey) {
+			a.log.Info("Running parallel performance sweep (this takes ~2 minutes)...")
+			sweepResult, err := benchmark.RunParallelSweep(ffmpegExe, a.config.VideoEncoder, 4, qualityArgs, a.log)
+			if err != nil {
+				a.log.Warnf("Parallel sweep failed: %v — keeping current parallel setting", err)
+			} else {
+				cache.ParallelResults[parallelKey] = *sweepResult
+				a.config.MaxParallelJobs = sweepResult.BestParallelism
+				a.log.Infof("Auto-configured: %d parallel job(s) gives best throughput (%.1f FPS)", sweepResult.BestParallelism, sweepResult.BestFPS)
+			}
+		} else {
+			cached := cache.ParallelResults[parallelKey]
+			a.log.Infof("Using cached parallel sweep: best = %d job(s) @ %.1f FPS", cached.BestParallelism, cached.BestFPS)
+			if a.config.MaxParallelJobs <= 1 {
+				a.config.MaxParallelJobs = cached.BestParallelism
+			}
 		}
 	}
 
