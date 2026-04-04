@@ -121,9 +121,9 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 			driveRoot := fileutil.GetDriveRoot(filePath)
 			cfg.Stats.AddTouchedDrive(driveRoot)
 
-			fileHash, _ := fileutil.GetFileHash(filePath, cfg.Config.UsePartialHash)
-			if fileHash == "error_hash" {
-				cfg.Log.Warnf("Failed to hash %s", filePath)
+			fileHash, err := fileutil.GetFileHash(filePath, cfg.Config.UsePartialHash)
+			if err != nil {
+				cfg.Log.Warnf("Failed to hash %s: %v", filePath, err)
 				cfg.Stats.IncrFilesErrored()
 				continue
 			}

@@ -14,6 +14,8 @@ import (
 	"github.com/zeebo/blake3"
 )
 
+const HashChunkSize = 16 * 1024 * 1024 // 16 MB
+
 // GetDriveRoot returns the volume root for filePath.
 // On Windows this is the drive root (e.g. "D:\").
 // On Unix it returns "/" for absolute paths; for paths with no volume it also
@@ -39,6 +41,7 @@ func GetParentFolderName(filePath, driveRoot string) string {
 
 // GetRelativePath returns the path from driveRoot to the file's directory.
 // Returns "ROOT" when the file sits directly on the drive.
+// Currently only exercised by tests; kept for potential future use.
 func GetRelativePath(filePath, driveRoot string) string {
 	dir := filepath.Dir(filePath)
 
@@ -74,38 +77,35 @@ func SanitizeFolderName(name string) string {
 // GetFileHash returns a hex-encoded BLAKE3 hash for filePath.
 // When partial is true, only the first 16 MB, middle 16 MB, last 16 MB, and
 // the file size are hashed — fast and sufficient for large media files.
-// Returns ("error_hash", 0) on any I/O failure.
-func GetFileHash(filePath string, partial bool) (string, float64) {
+func GetFileHash(filePath string, partial bool) (string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return "error_hash", 0.0
+		return "", fmt.Errorf("open: %w", err)
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return "error_hash", 0.0
+		return "", fmt.Errorf("stat: %w", err)
 	}
 	fileSize := info.Size()
 
 	hasher := blake3.New()
 
 	if partial {
-		const chunkSize = 16 * 1024 * 1024 // 16 MB
-
-		buf := make([]byte, chunkSize)
+		buf := make([]byte, HashChunkSize)
 		n, _ := io.ReadFull(f, buf)
 		hasher.Write(buf[:n])
 
-		if fileSize > chunkSize*2 {
+		if fileSize > HashChunkSize*2 {
 			middle := fileSize / 2
 			f.Seek(middle, 0) //nolint:errcheck
 			n, _ = io.ReadFull(f, buf)
 			hasher.Write(buf[:n])
 		}
 
-		if fileSize > chunkSize {
-			f.Seek(-chunkSize, 2) //nolint:errcheck
+		if fileSize > HashChunkSize {
+			f.Seek(-HashChunkSize, 2) //nolint:errcheck
 			n, _ = io.ReadFull(f, buf)
 			hasher.Write(buf[:n])
 		}
@@ -116,11 +116,11 @@ func GetFileHash(filePath string, partial bool) (string, float64) {
 	} else {
 		buf := make([]byte, 128*1024)
 		if _, err := io.CopyBuffer(hasher, f, buf); err != nil {
-			return "error_hash", 0.0
+			return "", fmt.Errorf("copy: %w", err)
 		}
 	}
 
-	return fmt.Sprintf("%x", hasher.Sum(nil)), 0.0
+	return fmt.Sprintf("%x", hasher.Sum(nil)), nil
 }
 
 // FormatBytes returns a human-readable size string (e.g. "1.5 MB").
