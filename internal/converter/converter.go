@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -23,6 +22,11 @@ import (
 	"video-converter/internal/pipeline"
 	"video-converter/internal/tui"
 	"video-converter/internal/types"
+)
+
+const (
+	OutputDirName  = "HSORTED"
+	TempFilePrefix = "__tmp__"
 )
 
 // Converter executes video conversion jobs.
@@ -79,7 +83,7 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 		outputRoot = c.OutputDriveOverride
 	}
 
-	finalDir := filepath.Join(outputRoot, "HSORTED", sanitized)
+	finalDir := filepath.Join(outputRoot, OutputDirName, sanitized)
 
 	// Determine temp directory
 	var tempDir string
@@ -89,7 +93,7 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 		}
 	}
 	if tempDir == "" {
-		tempDir = filepath.Join(outputRoot, "HSORTED", "_TEMP", sanitized)
+		tempDir = filepath.Join(outputRoot, OutputDirName, "_TEMP", sanitized)
 	}
 	os.MkdirAll(tempDir, 0755) //nolint:errcheck
 
@@ -102,7 +106,7 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 		outputExt = ".mkv"
 	}
 
-	tempPath := filepath.Join(tempDir, fmt.Sprintf("__tmp__%s%s", hash8, outputExt))
+	tempPath := filepath.Join(tempDir, fmt.Sprintf("%s%s%s", TempFilePrefix, hash8, outputExt))
 
 	// Build FFmpeg args
 	qualityArgs := c.SelectedEncoder.QualityArgs(c.Config.QualityPreset, job.Width)
@@ -119,7 +123,7 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 	}
 
 	// Run FFmpeg
-	ffmpegExe := resolveFFmpegExe(c.Config, c.ExecDir)
+	ffmpegExe := config.ResolveExecutable(c.Config.FFmpegPath, config.ExeName("ffmpeg"), c.ExecDir)
 	rc, stderrOut := ffmpeg.Run(ctx, ffmpegExe, args, job.FilePath, job.DurationSeconds, c.Log, onProgress, registerSuspend)
 
 	// GPU fallback
@@ -158,6 +162,7 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 		c.Log.Errorf("Failed to stat temp file: %v", err)
 		c.UI.CompleteError(jobID, fmt.Sprintf("✗ ERROR   [%d/%d] %s", job.FileNumber, job.TotalFiles, fileName))
 		os.Remove(tempPath) //nolint:errcheck
+		c.Stats.IncrFilesErrored()
 		return
 	}
 
@@ -392,25 +397,6 @@ func MoveFile(src, dst string) error {
 		_ = err
 	}
 	return nil
-}
-
-// resolveFFmpegExe finds the ffmpeg executable using config path or PATH.
-func resolveFFmpegExe(cfg *types.Config, execDir string) string {
-	if cfg.FFmpegPath == "" {
-		exe, _ := exec.LookPath(config.ExeName("ffmpeg"))
-		return exe
-	}
-	var path string
-	if filepath.IsAbs(cfg.FFmpegPath) {
-		path = cfg.FFmpegPath
-	} else {
-		path = filepath.Join(execDir, cfg.FFmpegPath)
-	}
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	exe, _ := exec.LookPath(config.ExeName("ffmpeg"))
-	return exe
 }
 
 // jobStringer wraps a types.Job to implement fmt.Stringer for FallbackManager.
