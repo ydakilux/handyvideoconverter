@@ -1,8 +1,6 @@
 package encoder
 
 import (
-	"context"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -21,34 +19,28 @@ func NewNvencEncoder() *NvencEncoder {
 	return &NvencEncoder{}
 }
 
+// Name returns the FFmpeg codec name for NVIDIA NVENC.
 func (e *NvencEncoder) Name() string {
 	return "hevc_nvenc"
 }
 
+// QualityArgs returns NVENC quality arguments (-cq and -preset) for the given preset and resolution.
 func (e *NvencEncoder) QualityArgs(preset string, width int) []string {
 	cq := strconv.Itoa(qualityValue(preset, width, nvencCQTable))
 	return []string{"-cq", cq, "-preset", nvencPreset(preset)}
 }
 
+// DeviceArgs returns the -gpu flag to select a specific NVIDIA GPU by index.
 func (e *NvencEncoder) DeviceArgs(gpuIndex int) []string {
 	return []string{"-gpu", strconv.Itoa(gpuIndex)}
 }
 
+// IsAvailable trial-encodes a short clip to verify NVENC works with the given FFmpeg binary.
 func (e *NvencEncoder) IsAvailable(ffmpegPath string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), TrialEncodeTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, ffmpegPath,
-		"-f", "lavfi",
-		"-i", "color=c=black:s=256x256:d=0.1",
-		"-frames:v", "1",
-		"-c:v", "hevc_nvenc",
-		"-f", "null", "-",
-	)
-	err := cmd.Run()
-	return err == nil
+	return trialEncode(ffmpegPath, "hevc_nvenc")
 }
 
+// ParseError inspects FFmpeg stderr for NVENC-specific GPU errors and returns a human-readable message.
 func (e *NvencEncoder) ParseError(stderr string) (bool, string) {
 	lower := strings.ToLower(stderr)
 	if strings.Contains(lower, "no capable devices found") {

@@ -62,6 +62,10 @@ type BenchmarkCache struct {
 	Version         string                             `json:"version"`
 }
 
+// CacheKey returns a deterministic SHA-256-based key for caching a
+// single-stream benchmark result. The key encodes the encoder name, GPU
+// identifier, and driver version so stale results are invalidated when
+// hardware or drivers change.
 func CacheKey(encoderName string, gpuIdentifier string, driverVersion string) string {
 	raw := fmt.Sprintf("%s|%s|%s", encoderName, gpuIdentifier, driverVersion)
 	hash := sha256.Sum256([]byte(raw))
@@ -75,6 +79,10 @@ func ParallelCacheKey(encoderName string) string {
 	return fmt.Sprintf("%x", hash[:16])
 }
 
+// RunBenchmark encodes a synthetic 1080p test source for 20 seconds using the
+// specified encoder and returns the measured FPS and wall-clock time. An
+// optional deviceArgs slice selects a specific GPU (e.g. ["-gpu", "1"] for
+// NVENC multi-GPU setups).
 func RunBenchmark(ffmpegPath string, encoder string, gpuIndex int, qualityArgs []string, logger *logrus.Logger, deviceArgs ...[]string) (*BenchmarkResult, error) {
 	if ffmpegPath == "" {
 		return nil, fmt.Errorf("ffmpeg not found — check ffmpeg_path in config or add ffmpeg to PATH")
@@ -311,6 +319,8 @@ func RunFullBenchmark(ffmpegPath string, encoders []detect.GPUInfo, qualityArgs 
 	return results, nil
 }
 
+// LoadCache reads the benchmark cache JSON file from the directory containing
+// configPath. Returns an empty cache (not nil) if the file does not exist yet.
 func LoadCache(configPath string) (*BenchmarkCache, error) {
 	emptyCache := &BenchmarkCache{
 		Results:         make(map[string]BenchmarkResult),
@@ -341,6 +351,8 @@ func LoadCache(configPath string) (*BenchmarkCache, error) {
 	return &cache, nil
 }
 
+// SaveCache writes the benchmark cache to a JSON file beside configPath,
+// using an atomic write-tmp-then-rename strategy.
 func SaveCache(configPath string, cache *BenchmarkCache) error {
 	cachePath := CachePath(configPath)
 
@@ -366,6 +378,8 @@ func CachePath(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "benchmark_cache.json")
 }
 
+// IsCacheValid reports whether a single-stream benchmark result for key exists
+// in cache and is younger than 30 days.
 func IsCacheValid(cache *BenchmarkCache, key string) bool {
 	result, ok := cache.Results[key]
 	if !ok {

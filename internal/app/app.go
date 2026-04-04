@@ -29,10 +29,10 @@ import (
 	"video-converter/internal/types"
 )
 
+// MaxParallelJobsCap is the hard upper bound on concurrent conversion jobs.
 const MaxParallelJobsCap = 8
 
 // Options holds the parsed CLI flags.
-
 type Options struct {
 	ConfigFile     string
 	DryRun         bool
@@ -491,38 +491,71 @@ func (a *App) runBenchmarks(ffmpegExe string) error {
 	return nil
 }
 
-func (a *App) buildStatsSummary(elapsed time.Duration) []string {
+type summaryData struct {
+	filesAnalyzed  int
+	filesProcessed int
+	filesImproved  int
+	filesDiscarded int
+	filesSkipped   int
+	filesErrored   int
+	originalBytes  int64
+	finalBytes     int64
+	savedBytes     int64
+	savedPct       float64
+	elapsed        time.Duration
+}
+
+func (a *App) collectSummaryData(elapsed time.Duration) summaryData {
 	a.stats.Mu.Lock()
 	defer a.stats.Mu.Unlock()
+
+	sd := summaryData{
+		filesAnalyzed:  a.stats.FilesAnalyzed,
+		filesProcessed: a.stats.FilesProcessed,
+		filesImproved:  a.stats.FilesImproved,
+		filesDiscarded: a.stats.FilesDiscarded,
+		filesSkipped:   a.stats.FilesSkipped,
+		filesErrored:   a.stats.FilesErrored,
+		originalBytes:  a.stats.OriginalBytes,
+		finalBytes:     a.stats.FinalBytes,
+		elapsed:        elapsed,
+	}
+	if sd.originalBytes > 0 {
+		sd.savedBytes = sd.originalBytes - sd.finalBytes
+		sd.savedPct = float64(sd.savedBytes) / float64(sd.originalBytes) * 100
+	}
+	return sd
+}
+
+func (a *App) buildStatsSummary(elapsed time.Duration) []string {
+	sd := a.collectSummaryData(elapsed)
 
 	var lines []string
 	lines = append(lines,
 		"",
 		"  VIDEO CONVERSION SUMMARY",
 		"  ─────────────────────────────────────",
-		fmt.Sprintf("  Files Analyzed:     %d", a.stats.FilesAnalyzed),
-		fmt.Sprintf("  Files Converted:    %d", a.stats.FilesProcessed),
-		fmt.Sprintf("    → Improved:       %d", a.stats.FilesImproved),
-		fmt.Sprintf("    → Discarded:      %d", a.stats.FilesDiscarded),
-		fmt.Sprintf("  Files Skipped:      %d", a.stats.FilesSkipped),
-		fmt.Sprintf("  Files Errored:      %d", a.stats.FilesErrored),
+		fmt.Sprintf("  Files Analyzed:     %d", sd.filesAnalyzed),
+		fmt.Sprintf("  Files Converted:    %d", sd.filesProcessed),
+		fmt.Sprintf("    → Improved:       %d", sd.filesImproved),
+		fmt.Sprintf("    → Discarded:      %d", sd.filesDiscarded),
+		fmt.Sprintf("  Files Skipped:      %d", sd.filesSkipped),
+		fmt.Sprintf("  Files Errored:      %d", sd.filesErrored),
 		"  ─────────────────────────────────────",
 	)
 
-	if a.stats.OriginalBytes > 0 {
-		saved := a.stats.OriginalBytes - a.stats.FinalBytes
-		pct := float64(saved) / float64(a.stats.OriginalBytes) * 100
+	if sd.originalBytes > 0 {
 		lines = append(lines,
-			fmt.Sprintf("  Original Size:      %s", fileutil.FormatBytes(a.stats.OriginalBytes)),
-			fmt.Sprintf("  Final Size:         %s", fileutil.FormatBytes(a.stats.FinalBytes)),
-			fmt.Sprintf("  Space Saved:        %s  (%.1f%%)", fileutil.FormatBytes(saved), pct),
+			fmt.Sprintf("  Original Size:      %s", fileutil.FormatBytes(sd.originalBytes)),
+			fmt.Sprintf("  Final Size:         %s", fileutil.FormatBytes(sd.finalBytes)),
+			fmt.Sprintf("  Space Saved:        %s  (%.1f%%)", fileutil.FormatBytes(sd.savedBytes), sd.savedPct),
 		)
 	}
 
-	if elapsed > 0 {
+	if sd.elapsed > 0 {
 		lines = append(lines,
 			"  ─────────────────────────────────────",
-			fmt.Sprintf("  Total Time:         %s", fileutil.FmtElapsed(elapsed)),
+			fmt.Sprintf("  Total Time:         %s", fileutil.FmtElapsed(sd.elapsed)),
 		)
 	}
 
@@ -533,8 +566,7 @@ func (a *App) buildStatsSummary(elapsed time.Duration) []string {
 // buildStatsSummaryBox returns the same data formatted as a fixed-width box for
 // the post-TUI plain-text stdout print.
 func (a *App) buildStatsSummaryBox(elapsed time.Duration) []string {
-	a.stats.Mu.Lock()
-	defer a.stats.Mu.Unlock()
+	sd := a.collectSummaryData(elapsed)
 
 	var lines []string
 	lines = append(lines,
@@ -542,29 +574,27 @@ func (a *App) buildStatsSummaryBox(elapsed time.Duration) []string {
 		"╔════════════════════════════════════════════════════════════════╗",
 		"║           VIDEO CONVERSION SUMMARY                             ║",
 		"╠════════════════════════════════════════════════════════════════╣",
-		fmt.Sprintf("║ Files Analyzed:     %-43d║", a.stats.FilesAnalyzed),
-		fmt.Sprintf("║ Files Converted:    %-43d║", a.stats.FilesProcessed),
-		fmt.Sprintf("║   → Improved:       %-43d║", a.stats.FilesImproved),
-		fmt.Sprintf("║   → Discarded:      %-43d║", a.stats.FilesDiscarded),
-		fmt.Sprintf("║ Files Skipped:      %-43d║", a.stats.FilesSkipped),
-		fmt.Sprintf("║ Files Errored:      %-43d║", a.stats.FilesErrored),
+		fmt.Sprintf("║ Files Analyzed:     %-43d║", sd.filesAnalyzed),
+		fmt.Sprintf("║ Files Converted:    %-43d║", sd.filesProcessed),
+		fmt.Sprintf("║   → Improved:       %-43d║", sd.filesImproved),
+		fmt.Sprintf("║   → Discarded:      %-43d║", sd.filesDiscarded),
+		fmt.Sprintf("║ Files Skipped:      %-43d║", sd.filesSkipped),
+		fmt.Sprintf("║ Files Errored:      %-43d║", sd.filesErrored),
 		"╠════════════════════════════════════════════════════════════════╣",
 	)
 
-	if a.stats.OriginalBytes > 0 {
-		saved := a.stats.OriginalBytes - a.stats.FinalBytes
-		pct := float64(saved) / float64(a.stats.OriginalBytes) * 100
+	if sd.originalBytes > 0 {
 		lines = append(lines,
-			fmt.Sprintf("║ Original Size:      %-43s║", fileutil.FormatBytes(a.stats.OriginalBytes)),
-			fmt.Sprintf("║ Final Size:         %-43s║", fileutil.FormatBytes(a.stats.FinalBytes)),
-			fmt.Sprintf("║ Space Saved:        %-33s (%.1f%%)║", fileutil.FormatBytes(saved), pct),
+			fmt.Sprintf("║ Original Size:      %-43s║", fileutil.FormatBytes(sd.originalBytes)),
+			fmt.Sprintf("║ Final Size:         %-43s║", fileutil.FormatBytes(sd.finalBytes)),
+			fmt.Sprintf("║ Space Saved:        %-33s (%.1f%%)║", fileutil.FormatBytes(sd.savedBytes), sd.savedPct),
 		)
 	}
 
-	if elapsed > 0 {
+	if sd.elapsed > 0 {
 		lines = append(lines,
 			"╠════════════════════════════════════════════════════════════════╣",
-			fmt.Sprintf("║ Total Time:         %-43s║", fileutil.FmtElapsed(elapsed)),
+			fmt.Sprintf("║ Total Time:         %-43s║", fileutil.FmtElapsed(sd.elapsed)),
 		)
 	}
 

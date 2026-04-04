@@ -1,3 +1,5 @@
+// Package nvidia queries nvidia-smi for GPU metadata (VRAM, driver version,
+// NVENC session counts) used by the benchmark and distributor subsystems.
 package nvidia
 
 import (

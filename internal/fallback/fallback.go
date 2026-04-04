@@ -1,3 +1,5 @@
+// Package fallback provides GPU-to-CPU fallback logic when a hardware encoder
+// fails mid-conversion.
 package fallback
 
 import (
@@ -12,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// FallbackManager detects GPU encoding failures and optionally prompts the user to retry with CPU.
 type FallbackManager struct {
 	interactive bool
 	stdin       io.Reader
@@ -24,6 +27,7 @@ type FallbackManager struct {
 	promptMu sync.Mutex
 }
 
+// NewFallbackManager creates a FallbackManager. When interactive is true, GPU errors prompt the user via stdinReader; otherwise fallback is automatic.
 func NewFallbackManager(interactive bool, stdinReader io.Reader, logger *logrus.Logger) *FallbackManager {
 	return &FallbackManager{
 		interactive: interactive,
@@ -32,6 +36,7 @@ func NewFallbackManager(interactive bool, stdinReader io.Reader, logger *logrus.
 	}
 }
 
+// HandleGPUError checks whether stderr indicates a GPU-specific failure and, if so, either prompts the user or silently falls back to CPU.
 func (fm *FallbackManager) HandleGPUError(stderr string, enc encoder.Encoder, job fmt.Stringer) (bool, error) {
 	isGPUError, msg := enc.ParseError(stderr)
 	if !isGPUError {

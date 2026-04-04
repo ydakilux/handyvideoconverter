@@ -1,3 +1,5 @@
+// Package detect probes FFmpeg for available GPU encoders via trial encodes
+// and selects the best one based on a fixed priority order.
 package detect
 
 import (
@@ -9,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// GPUInfo describes a single encoder (GPU or CPU) and whether it passed the trial encode.
 type GPUInfo struct {
 	Name          string
 	Encoder       string
@@ -17,6 +20,7 @@ type GPUInfo struct {
 	TrialEncodeMs int64
 }
 
+// DetectionResult aggregates all probed encoders, the auto-selected preferred encoder, and the CPU fallback.
 type DetectionResult struct {
 	Available   []GPUInfo
 	Preferred   GPUInfo
@@ -33,10 +37,12 @@ var knownEncoders = []struct {
 	{"hevc_qsv", "Intel QSV", 0},
 }
 
+// PriorityOrder returns the encoder preference order: NVENC > AMF > QSV > libx265.
 func PriorityOrder() []string {
 	return []string{"hevc_nvenc", "hevc_amf", "hevc_qsv", "libx265"}
 }
 
+// SelectBest picks the highest-priority available encoder from result, falling back to CPU.
 func SelectBest(result *DetectionResult) GPUInfo {
 	priority := PriorityOrder()
 	lookup := make(map[string]GPUInfo, len(result.Available))
@@ -53,6 +59,7 @@ func SelectBest(result *DetectionResult) GPUInfo {
 	return result.CPUFallback
 }
 
+// DetectEncoders probes all known GPU encoders via FFmpeg trial encodes and returns a DetectionResult with availability status for each.
 func DetectEncoders(ffmpegPath string, logger *logrus.Logger) (*DetectionResult, error) {
 	cpuFallback := GPUInfo{
 		Name:        "CPU x265",

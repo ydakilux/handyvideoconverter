@@ -1,8 +1,6 @@
 package encoder
 
 import (
-	"context"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -21,33 +19,28 @@ func NewQsvEncoder() *QsvEncoder {
 	return &QsvEncoder{}
 }
 
+// Name returns the FFmpeg codec name for Intel Quick Sync Video.
 func (e *QsvEncoder) Name() string {
 	return "hevc_qsv"
 }
 
+// QualityArgs returns QSV quality arguments (-global_quality and -preset) for the given preset and resolution.
 func (e *QsvEncoder) QualityArgs(preset string, width int) []string {
 	gq := strconv.Itoa(qualityValue(preset, width, qsvGQTable))
 	return []string{"-global_quality", gq, "-preset", qsvPreset(preset)}
 }
 
+// DeviceArgs returns an empty slice; QSV does not support device selection via FFmpeg.
 func (e *QsvEncoder) DeviceArgs(gpuIndex int) []string {
 	return []string{}
 }
 
+// IsAvailable trial-encodes a short clip to verify QSV works with the given FFmpeg binary.
 func (e *QsvEncoder) IsAvailable(ffmpegPath string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), TrialEncodeTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, ffmpegPath,
-		"-f", "lavfi",
-		"-i", "color=c=black:s=256x256:d=0.1",
-		"-frames:v", "1",
-		"-c:v", "hevc_qsv",
-		"-f", "null", "-",
-	)
-	return cmd.Run() == nil
+	return trialEncode(ffmpegPath, "hevc_qsv")
 }
 
+// ParseError inspects FFmpeg stderr for QSV-specific errors and returns a human-readable message.
 func (e *QsvEncoder) ParseError(stderr string) (bool, string) {
 	if strings.Contains(stderr, "Error initializing an MFX session") {
 		return true, "QSV: MFX session initialization failed"

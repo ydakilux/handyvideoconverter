@@ -1,3 +1,4 @@
+// Package config handles loading, creating, migrating, and validating the JSON configuration file.
 package config
 
 import (
@@ -34,6 +35,9 @@ type legacyConfig struct {
 	SeqEnabled bool   `json:"seq_enabled"`
 }
 
+// LoadConfig reads the JSON configuration from path, applying any pending
+// migrations (legacy Seq fields, missing extensions, stale benchmark_cache).
+// If path does not exist, a default config is created and returned.
 func LoadConfig(path string) (types.Config, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return CreateDefaultConfig(path)
@@ -127,6 +131,7 @@ func containsExt(list []string, ext string) bool {
 	return false
 }
 
+// CreateDefaultConfig writes a new config file at path with sensible defaults and returns the resulting Config.
 func CreateDefaultConfig(path string) (types.Config, error) {
 	cfg := types.Config{
 		Seq: types.SeqConfig{
@@ -187,6 +192,7 @@ func writeConfig(path string, cfg types.Config) error {
 	return os.Rename(tmp, path)
 }
 
+// ValidateEncoder returns an error if encoder is not in the set returned by ValidEncoders.
 func ValidateEncoder(encoder string) error {
 	if encoder == "" {
 		return nil

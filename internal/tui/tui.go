@@ -877,9 +877,12 @@ func New(opts SetupOptions, onControl func(action ControlAction)) (*UI, <-chan S
 type ControlAction int
 
 const (
-	ActionPause            ControlAction = ControlAction(actionPause)
+	// ActionPause requests the pipeline to pause/resume.
+	ActionPause ControlAction = ControlAction(actionPause)
+	// ActionStopAfterCurrent requests a graceful stop after the current job finishes.
 	ActionStopAfterCurrent ControlAction = ControlAction(actionStopAfterCurrent)
-	ActionStopNow          ControlAction = ControlAction(actionStopNow)
+	// ActionStopNow requests an immediate pipeline abort.
+	ActionStopNow ControlAction = ControlAction(actionStopNow)
 )
 
 // SendControlState pushes updated pause/stop state into the TUI so the

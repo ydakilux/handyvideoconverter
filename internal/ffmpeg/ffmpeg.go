@@ -1,3 +1,5 @@
+// Package ffmpeg wraps FFmpeg and FFprobe execution, progress parsing, and
+// process suspend/resume on Windows.
 package ffmpeg
 
 import (
@@ -17,8 +19,10 @@ import (
 )
 
 const (
+	// ExitCodeInternal is the synthetic exit code returned when FFmpeg cannot be started or its process state is unknown.
 	ExitCodeInternal = 999
-	FFprobeTimeout   = 30 * time.Second
+	// FFprobeTimeout is the maximum time allowed for an FFprobe duration query.
+	FFprobeTimeout = 30 * time.Second
 )
 
 // MakeSuspendFn returns a suspend/resume callback for the given *exec.Cmd.
@@ -132,6 +136,7 @@ func Run(ctx context.Context, ffmpegExe string, args []string, filePath string, 
 	return 0, stderrBuf.String()
 }
 
+// GetDuration runs FFprobe to extract the total duration (in seconds) of filePath. Returns 0 if FFprobe is unavailable or the query fails.
 func GetDuration(filePath, ffprobeExe string, logger *logrus.Logger) float64 {
 	if ffprobeExe == "" {
 		return 0.0

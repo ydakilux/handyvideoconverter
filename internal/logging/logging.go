@@ -1,3 +1,5 @@
+// Package logging configures logrus with file output, a simple formatter, and
+// an optional Seq structured-log hook.
 package logging
 
 import (
@@ -18,6 +20,7 @@ import (
 // SimpleFormatter outputs only the log message without level or other metadata
 type SimpleFormatter struct{}
 
+// Format renders a log entry as its bare message followed by a newline.
 func (f *SimpleFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	return []byte(entry.Message + "\n"), nil
 }

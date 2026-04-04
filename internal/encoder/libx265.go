@@ -19,23 +19,28 @@ func NewLibx265Encoder() *Libx265Encoder {
 	return &Libx265Encoder{}
 }
 
+// Name returns the FFmpeg codec name for the CPU-based libx265 encoder.
 func (e *Libx265Encoder) Name() string {
 	return "libx265"
 }
 
+// QualityArgs returns libx265 quality arguments (-crf and -preset) for the given preset and resolution.
 func (e *Libx265Encoder) QualityArgs(preset string, width int) []string {
 	crf := strconv.Itoa(qualityValue(preset, width, libx265CRFTable))
 	return []string{"-crf", crf, "-preset", libx265Preset(preset)}
 }
 
+// DeviceArgs returns an empty slice; CPU encoding has no device selection.
 func (e *Libx265Encoder) DeviceArgs(gpuIndex int) []string {
 	return []string{}
 }
 
+// IsAvailable always returns true because libx265 is a software encoder.
 func (e *Libx265Encoder) IsAvailable(ffmpegPath string) bool {
 	return true
 }
 
+// ParseError always returns false; CPU encoding does not produce GPU-specific errors.
 func (e *Libx265Encoder) ParseError(stderr string) (bool, string) {
 	return false, ""
 }

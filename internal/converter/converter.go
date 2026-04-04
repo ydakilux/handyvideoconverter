@@ -25,7 +25,9 @@ import (
 )
 
 const (
-	OutputDirName  = "HSORTED"
+	// OutputDirName is the top-level output directory created on the target drive.
+	OutputDirName = "HSORTED"
+	// TempFilePrefix is prepended to temporary files during conversion.
 	TempFilePrefix = "__tmp__"
 )
 
@@ -281,70 +283,71 @@ func BuildConversionArgs(inputPath, outputPath, outputExt, encoderName string, q
 			"-map_chapters", "0",
 		)
 	} else {
-		// MP4: must be selective about what the container can carry.
-		args = append(args, "-map", "0:v:0") // always include primary video
-
-		if videoInfo != nil && len(videoInfo.AudioStreams) > 0 {
-			// Per-stream audio disposition: copy compatible, transcode others.
-			hasCompatible := false
-			for i, a := range videoInfo.AudioStreams {
-				if mp4CompatibleAudioCodecs[strings.ToLower(a.CodecName)] {
-					args = append(args, "-map", fmt.Sprintf("0:a:%d", i))
-					hasCompatible = true
-				}
-			}
-			if hasCompatible {
-				args = append(args, "-c:a", "copy")
-			}
-			// For each incompatible stream, fall back to AAC transcode.
-			for i, a := range videoInfo.AudioStreams {
-				if !mp4CompatibleAudioCodecs[strings.ToLower(a.CodecName)] {
-					streamSpec := fmt.Sprintf("0:a:%d", i)
-					args = append(args, "-map", streamSpec)
-					args = append(args, fmt.Sprintf("-c:a:%d", i), "aac")
-				}
-			}
-			// If NO audio stream was compatible (all transcoded), set global
-			// codec to aac as a clean fallback.
-			if !hasCompatible {
-				args = append(args, "-c:a", "aac")
-			}
-		} else {
-			// No stream info available — safe default: map all audio, copy
-			// whatever is compatible and let FFmpeg pick the first audio stream.
-			args = append(args, "-map", "0:a?", "-c:a", "copy")
-		}
-
-		// Subtitles: copy only MP4-compatible text-based formats.
-		if videoInfo != nil && len(videoInfo.SubtitleStreams) > 0 {
-			for i, s := range videoInfo.SubtitleStreams {
-				if mp4CompatibleSubtitleCodecs[strings.ToLower(s.CodecName)] {
-					args = append(args, "-map", fmt.Sprintf("0:s:%d", i))
-				}
-				// Image-based subtitles (pgssub, dvd_subtitle, dvb_subtitle) are
-				// intentionally dropped — the MP4 container cannot carry them.
-			}
-			args = append(args, "-c:s", "mov_text")
-		}
-
-		// HDR colour-space passthrough.
-		if videoInfo != nil && hdrColorTransfers[strings.ToLower(videoInfo.Color.ColorTransfer)] {
-			if videoInfo.Color.ColorPrimaries != "" {
-				args = append(args, "-color_primaries", videoInfo.Color.ColorPrimaries)
-			}
-			if videoInfo.Color.ColorTransfer != "" {
-				args = append(args, "-color_trc", videoInfo.Color.ColorTransfer)
-			}
-			if videoInfo.Color.ColorSpace != "" {
-				args = append(args, "-colorspace", videoInfo.Color.ColorSpace)
-			}
-		}
-
-		args = append(args, "-map_metadata", "0", "-map_chapters", "0")
-		args = append(args, "-movflags", "+faststart")
+		args = append(args, buildMP4Args(videoInfo)...)
 	}
 
 	args = append(args, outputPath)
+	return args
+}
+
+// buildMP4Args returns the stream-mapping, audio/subtitle codec, HDR
+// passthrough, and movflags arguments specific to the MP4 container.
+func buildMP4Args(videoInfo *types.VideoInfo) []string {
+	var args []string
+
+	args = append(args, "-map", "0:v:0") // primary video
+
+	if videoInfo != nil && len(videoInfo.AudioStreams) > 0 {
+		// Per-stream audio disposition: copy compatible, transcode others.
+		hasCompatible := false
+		for i, a := range videoInfo.AudioStreams {
+			if mp4CompatibleAudioCodecs[strings.ToLower(a.CodecName)] {
+				args = append(args, "-map", fmt.Sprintf("0:a:%d", i))
+				hasCompatible = true
+			}
+		}
+		if hasCompatible {
+			args = append(args, "-c:a", "copy")
+		}
+		for i, a := range videoInfo.AudioStreams {
+			if !mp4CompatibleAudioCodecs[strings.ToLower(a.CodecName)] {
+				streamSpec := fmt.Sprintf("0:a:%d", i)
+				args = append(args, "-map", streamSpec)
+				args = append(args, fmt.Sprintf("-c:a:%d", i), "aac")
+			}
+		}
+		if !hasCompatible {
+			args = append(args, "-c:a", "aac")
+		}
+	} else {
+		args = append(args, "-map", "0:a?", "-c:a", "copy")
+	}
+
+	// Subtitles: copy only MP4-compatible text-based formats.
+	if videoInfo != nil && len(videoInfo.SubtitleStreams) > 0 {
+		for i, s := range videoInfo.SubtitleStreams {
+			if mp4CompatibleSubtitleCodecs[strings.ToLower(s.CodecName)] {
+				args = append(args, "-map", fmt.Sprintf("0:s:%d", i))
+			}
+		}
+		args = append(args, "-c:s", "mov_text")
+	}
+
+	// HDR colour-space passthrough.
+	if videoInfo != nil && hdrColorTransfers[strings.ToLower(videoInfo.Color.ColorTransfer)] {
+		if videoInfo.Color.ColorPrimaries != "" {
+			args = append(args, "-color_primaries", videoInfo.Color.ColorPrimaries)
+		}
+		if videoInfo.Color.ColorTransfer != "" {
+			args = append(args, "-color_trc", videoInfo.Color.ColorTransfer)
+		}
+		if videoInfo.Color.ColorSpace != "" {
+			args = append(args, "-colorspace", videoInfo.Color.ColorSpace)
+		}
+	}
+
+	args = append(args, "-map_metadata", "0", "-map_chapters", "0")
+	args = append(args, "-movflags", "+faststart")
 	return args
 }
 

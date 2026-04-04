@@ -3,9 +3,31 @@
 // the correct FFmpeg quality/device arguments for its codec.
 package encoder
 
-import "time"
+import (
+	"context"
+	"os/exec"
+	"time"
+)
 
+// TrialEncodeTimeout is the maximum time allowed for a trial encode when probing encoder availability.
 const TrialEncodeTimeout = 10 * time.Second
+
+// trialEncode runs a minimal FFmpeg encode (one frame, 256×256 black) using the
+// given codec to verify that the encoder is available and functional. Returns
+// true only when FFmpeg exits cleanly.
+func trialEncode(ffmpegPath, codec string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), TrialEncodeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, ffmpegPath,
+		"-f", "lavfi",
+		"-i", "color=c=black:s=256x256:d=0.1",
+		"-frames:v", "1",
+		"-c:v", codec,
+		"-f", "null", "-",
+	)
+	return cmd.Run() == nil
+}
 
 // Encoder abstracts a video encoder's FFmpeg argument generation and availability probing.
 type Encoder interface {

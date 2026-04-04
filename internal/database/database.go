@@ -12,6 +12,8 @@ import (
 	"video-converter/internal/types"
 )
 
+// CacheFileName is the name of the per-drive JSON cache file that stores
+// conversion records keyed by file hash.
 const CacheFileName = "converted_files.json"
 
 // DatabaseManager manages per-drive cache files with thread-safe access.
@@ -23,6 +25,8 @@ type DatabaseManager struct {
 	logger *logrus.Logger
 }
 
+// NewDatabaseManager creates a DatabaseManager that stores per-drive caches
+// in memory and flushes them to JSON files on demand.
 func NewDatabaseManager(logger *logrus.Logger) *DatabaseManager {
 	return &DatabaseManager{
 		dbs:    make(map[string]map[string]types.Record),
@@ -31,6 +35,9 @@ func NewDatabaseManager(logger *logrus.Logger) *DatabaseManager {
 	}
 }
 
+// GetRecord returns the cached conversion record for the given file hash on
+// driveRoot, or nil if no record exists. Lazily loads the drive's cache on
+// first access.
 func (db *DatabaseManager) GetRecord(driveRoot, fileHash string) *types.Record {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -45,6 +52,8 @@ func (db *DatabaseManager) GetRecord(driveRoot, fileHash string) *types.Record {
 	return nil
 }
 
+// UpdateRecord inserts or replaces the record for fileHash on driveRoot and
+// marks the drive's cache as dirty so the next SaveAll writes it to disk.
 func (db *DatabaseManager) UpdateRecord(driveRoot, fileHash string, rec types.Record) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -106,6 +115,9 @@ func (db *DatabaseManager) loadDB(driveRoot string) {
 	db.dbs[driveRoot] = records
 }
 
+// SaveAll flushes all dirty per-drive caches to disk atomically (write .tmp
+// then rename). Falls back to a user-cache directory when the drive root is
+// not writable.
 func (db *DatabaseManager) SaveAll() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
