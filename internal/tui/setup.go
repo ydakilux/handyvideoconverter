@@ -12,7 +12,6 @@ package tui
 // automatically; the phase is skipped entirely when nothing is needed.
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -286,249 +285,26 @@ func (m setupModel) update(msg tea.Msg) (setupModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.step {
 		case stepStartup:
-			// Allow early exit; everything else is ignored until startup finishes.
-			if msg.String() == "ctrl+c" || msg.String() == "esc" {
-				m.answers.Cancelled = true
-				m.step = stepDone
-				return m, nil
-			}
-			return m, nil
-
+			return m.updateStepStartup(msg)
 		case stepFolder:
-			// Drive-switcher overlay takes priority.
-			if m.fpDriveOverlay {
-				switch msg.String() {
-				case "up", "k":
-					if m.fpDriveCursor > 0 {
-						m.fpDriveCursor--
-					}
-				case "down", "j":
-					if m.fpDriveCursor < len(m.opts.AvailableDrives)-1 {
-						m.fpDriveCursor++
-					}
-				case "enter":
-					return m, m.jumpToDrive()
-				case "tab", "esc":
-					m.fpDriveOverlay = false
-				case "ctrl+c":
-					m.answers.Cancelled = true
-					m.step = stepDone
-					return m, nil
-				}
-				return m, nil // swallow all keys while overlay is open
-			}
-			// Normal folder-picker keys.
-			switch msg.String() {
-			case "tab":
-				if len(m.opts.AvailableDrives) > 0 {
-					m.fpDriveOverlay = true
-					m.fpDriveCursor = 0
-					// Pre-select the drive that matches the current directory.
-					cur := strings.ToUpper(m.fp.CurrentDirectory)
-					for i, d := range m.opts.AvailableDrives {
-						if strings.HasPrefix(cur, strings.ToUpper(strings.SplitN(d, " ", 2)[0])) {
-							m.fpDriveCursor = i
-							break
-						}
-					}
-				}
-				return m, nil
-			case "ctrl+c":
-				m.answers.Cancelled = true
-				m.step = stepDone
-				return m, nil
-			case "q":
-				m.answers.Cancelled = true
-				m.step = stepDone
-				return m, nil
-			}
-			// (Space and Enter are intercepted below in the sub-component delegate)
-
+			return m.updateStepFolder(msg)
 		case stepConfirm:
-			switch msg.String() {
-			case "enter", " ":
-				// User confirmed the scan overview — proceed to next question.
-				m.answers.Paths = make([]string, len(m.selectedPaths))
-				copy(m.answers.Paths, m.selectedPaths)
-				m.advance()
-				return m, m.focusCmd()
-			case "backspace", "b":
-				// Go back to the picker to add/remove selections.
-				m.step = stepFolder
-				return m, nil
-			case "ctrl+c", "esc", "q":
-				m.answers.Cancelled = true
-				m.step = stepDone
-				return m, nil
-			}
-			return m, nil
-
+			return m.updateStepConfirm(msg)
 		case stepBypass, stepForceHevc:
-			switch strings.ToLower(msg.String()) {
-			case "y":
-				if m.step == stepBypass {
-					m.answers.Bypass = true
-				} else {
-					m.answers.ForceHevc = true
-				}
-				m.advance()
-				return m, m.focusCmd()
-			case "n", "enter":
-				m.advance()
-				return m, m.focusCmd()
-			case "ctrl+c", "esc":
-				m.answers.Cancelled = true
-				m.step = stepDone
-				return m, nil
-			}
-			return m, nil // ignore other keys
-
+			return m.updateStepYesNo(msg)
 		case stepParallelJobs:
-			switch msg.String() {
-			case "enter":
-				n := m.opts.DefaultParallel
-				if v, err := strconv.Atoi(strings.TrimSpace(m.ti.Value())); err == nil && v >= 1 {
-					if v > 8 {
-						v = 8
-					}
-					n = v
-				}
-				m.answers.ParallelJobs = n
-				m.advance()
-				return m, m.focusCmd()
-			case "ctrl+c", "esc":
-				m.answers.Cancelled = true
-				m.step = stepDone
-				return m, nil
-			}
-
+			return m.updateStepParallelJobs(msg)
 		case stepOutputDrive:
-			if !m.driveYesAsked {
-				// Ask "different drive?"
-				switch strings.ToLower(msg.String()) {
-				case "y":
-					m.driveYesAsked = true
-					m.driveWantsDiff = true
-					return m, nil
-				case "n", "enter":
-					m.answers.OutputDrive = ""
-					m.advance()
-					return m, m.focusCmd()
-				case "ctrl+c", "esc":
-					m.answers.Cancelled = true
-					m.step = stepDone
-					return m, nil
-				}
-				return m, nil
-			}
-			// Drive list navigation.
-			switch msg.String() {
-			case "up", "k":
-				if m.driveCursor > 0 {
-					m.driveCursor--
-				}
-			case "down", "j":
-				if m.driveCursor < len(m.opts.AvailableDrives)-1 {
-					m.driveCursor++
-				}
-			case "enter":
-				if len(m.opts.AvailableDrives) > 0 {
-					selected := m.opts.AvailableDrives[m.driveCursor]
-					m.answers.OutputDrive = strings.SplitN(selected, " ", 2)[0]
-				}
-				m.advance()
-				return m, m.focusCmd()
-			case "esc":
-				// "cancel drive selection" = use same drive
-				m.answers.OutputDrive = ""
-				m.advance()
-				return m, m.focusCmd()
-			case "ctrl+c":
-				m.answers.Cancelled = true
-				m.step = stepDone
-				return m, nil
-			}
-			return m, nil
+			return m.updateStepOutputDrive(msg)
 		}
 	}
 
-	// Delegate to sub-components.
-	var cmd tea.Cmd
-	switch m.step {
-	case stepFolder:
-		// Don't forward key events to the filepicker while the drive overlay is open.
-		if _, isKey := msg.(tea.KeyMsg); isKey && m.fpDriveOverlay {
-			break
-		}
-		if km, isKey := msg.(tea.KeyMsg); isKey {
-			switch km.String() {
-			case " ":
-				// Space: toggle the highlighted entry (dir or file) without
-				// navigating into it.  We use our own fpFiles/fpCursor mirror
-				// instead of synthetic key tricks.
-				if len(m.fpFiles) == 0 {
-					return m, nil
-				}
-				entry := m.fpFiles[m.fpCursor]
-				full := filepath.Join(m.fp.CurrentDirectory, entry.Name())
-				m.selectedPaths = togglePath(m.selectedPaths, full)
-				m.syncFpHeight()
-				return m, nil
-			case "c":
-				// c: confirm selection and advance to the scan overview.
-				if len(m.selectedPaths) > 0 {
-					m.scan = scanPaths(m.selectedPaths, m.opts.VideoExtensions)
-					m.advance() // → stepConfirm
-					return m, nil
-				}
-				// Nothing selected yet — ignore.
-				return m, nil
-			case "delete", "d":
-				// Remove the last selected path.
-				if len(m.selectedPaths) > 0 {
-					m.selectedPaths = m.selectedPaths[:len(m.selectedPaths)-1]
-					m.syncFpHeight()
-				}
-				return m, nil
-			// Mirror cursor-movement keys so fpCursor stays in sync with fp.
-			case "j", "down", "ctrl+n":
-				if m.fpCursor < len(m.fpFiles)-1 {
-					m.fpCursor++
-				}
-			case "k", "up", "ctrl+p":
-				if m.fpCursor > 0 {
-					m.fpCursor--
-				}
-			case "g":
-				m.fpCursor = 0
-			case "G":
-				if len(m.fpFiles) > 0 {
-					m.fpCursor = len(m.fpFiles) - 1
-				}
-			case "J", "pgdown":
-				m.fpCursor += m.fp.Height
-				if m.fpCursor >= len(m.fpFiles) {
-					m.fpCursor = len(m.fpFiles) - 1
-				}
-			case "K", "pgup":
-				m.fpCursor -= m.fp.Height
-				if m.fpCursor < 0 {
-					m.fpCursor = 0
-				}
-			}
-		}
-		prevDir := m.fp.CurrentDirectory
-		m.fp, cmd = m.fp.Update(msg)
-		// If the filepicker navigated into or out of a directory, reload our
-		// mirror so Space always sees the correct entries.
-		if m.fp.CurrentDirectory != prevDir {
-			m.fpLoadDir(m.fp.CurrentDirectory)
-		}
-	case stepParallelJobs:
-		m.ti, cmd = m.ti.Update(msg)
+	// Delegate non-key messages to sub-components.
+	if m.step == stepFolder {
+		return m.updateStepFolder(msg)
 	}
 
-	return m, cmd
+	return m, nil
 }
 
 // syncFpHeight recalculates m.fp.Height so that the filepicker + the
@@ -590,10 +366,11 @@ func (m *setupModel) advance() {
 	}
 }
 
-// focusCmd returns filepicker Init when we've moved back to the folder step
-// (shouldn't happen) or nil otherwise.
-func (m *setupModel) focusCmd() tea.Cmd {
-	return nil
+// advanceAndReturn moves to the next needed step and returns the updated model
+// with no command.  Convenience for the common advance-then-return pattern.
+func (m setupModel) advanceAndReturn() (setupModel, tea.Cmd) {
+	m.advance()
+	return m, nil
 }
 
 // jumpToDrive teleports the filepicker to the drive selected in the overlay,
@@ -760,7 +537,6 @@ func (m setupModel) view() string {
 	if w < 50 {
 		w = 50
 	}
-	inner := w - 4 // border + padding
 
 	var b strings.Builder
 
@@ -769,162 +545,18 @@ func (m setupModel) view() string {
 
 	switch m.step {
 	case stepStartup:
-		spinner := setupStyleSpinner.Render(spinnerFrames[m.startupTick%len(spinnerFrames)])
-		b.WriteString(spinner + "  " + setupStyleLabel.Render("Initialising…") + "\n\n")
-		// Show all received status lines; dim older ones.
-		for i, line := range m.startupLines {
-			if i == len(m.startupLines)-1 {
-				b.WriteString("  " + setupStyleStartupLine.Render(line) + "\n")
-			} else {
-				b.WriteString("  " + setupStyleStartupDim.Render(line) + "\n")
-			}
-		}
-		b.WriteString("\n" + setupStyleHint.Render("  [Esc] cancel") + "\n")
-
+		b.WriteString(m.viewStepStartup())
 	case stepFolder:
-		b.WriteString(setupStyleLabel.Render("Select input folder") + "\n")
-		if m.fpDriveOverlay {
-			hint := setupStyleHint.Render("[↑/k][↓/j] navigate drives   [Enter] jump   [Tab/Esc] close")
-			b.WriteString(hint + "\n")
-			b.WriteString(setupStyleCurrent.Render("  "+m.fp.CurrentDirectory) + "\n\n")
-			// Drive list overlay.
-			for i, d := range m.opts.AvailableDrives {
-				cursor := "  "
-				style := setupStyleDriveNormal
-				if i == m.fpDriveCursor {
-					cursor = setupStyleCursor.Render("❯ ")
-					style = setupStyleDriveSelected
-				}
-				b.WriteString(style.Render(truncate(cursor+d, inner)) + "\n")
-			}
-		} else {
-			tabHint := ""
-			if len(m.opts.AvailableDrives) > 0 {
-				tabHint = "  [Tab] switch drive"
-			}
-			confirmHint := ""
-			if len(m.selectedPaths) > 0 {
-				confirmHint = "  [c] Confirm"
-			}
-			hint := setupStyleHint.Render("[Space] toggle highlighted  [←/h] up  [→/l/Enter] open  [d] remove last  [q] cancel" + tabHint + confirmHint)
-			b.WriteString(hint + "\n")
-			b.WriteString(setupStyleCurrent.Render("  "+m.fp.CurrentDirectory) + "\n\n")
-			b.WriteString(m.fp.View())
-			// Show selected paths below the filepicker — capped to selHeight
-			// rows so the list never pushes content off-screen.
-			if len(m.selectedPaths) > 0 {
-				_, selH := m.splitHeights()
-				// selH includes the header line; items get selH-1 rows.
-				itemRows := selH - 1
-				if itemRows < 1 {
-					itemRows = 1
-				}
-				paths := m.selectedPaths
-				// Show the most-recently-added items (tail of the slice).
-				if len(paths) > itemRows {
-					paths = paths[len(paths)-itemRows:]
-				}
-				b.WriteString("\n")
-				label := fmt.Sprintf("  Selected (%d)", len(m.selectedPaths))
-				if len(m.selectedPaths) > itemRows {
-					label += fmt.Sprintf("  [showing last %d]", itemRows)
-				}
-				b.WriteString(setupStyleLabel.Render(label+"  [d] remove last") + "\n")
-				for _, p := range paths {
-					b.WriteString(setupStyleAnswer.Render("  ✓ "+truncate(p, inner-4)) + "\n")
-				}
-			}
-		}
-
+		b.WriteString(m.viewStepFolder(w))
 	case stepConfirm:
-		b.WriteString(setupStyleLabel.Render("Conversion overview") + "\n\n")
-		// Stats row.
-		b.WriteString(setupStyleHint.Render("  Directories : ") +
-			setupStyleAnswer.Render(strconv.Itoa(m.scan.totalDirs)) + "\n")
-		b.WriteString(setupStyleHint.Render("  Video files : ") +
-			setupStyleAnswer.Render(strconv.Itoa(m.scan.totalFiles)) + "\n\n")
-		// Base dirs list.
-		b.WriteString(setupStyleLabel.Render("  Source paths:") + "\n")
-		for _, d := range m.scan.baseDirs {
-			b.WriteString(setupStyleAnswer.Render("    • "+truncate(d, inner-6)) + "\n")
-		}
-		b.WriteString("\n" + setupStyleHint.Render("  [Enter/Space] Start   [b/Backspace] Back   [q] Cancel") + "\n")
-
+		b.WriteString(m.viewStepConfirm(w))
 	case stepBypass, stepForceHevc:
-		// Show already-answered items above.
-		b.WriteString(m.renderAnsweredAbove())
-		var question string
-		if m.step == stepBypass {
-			question = "Force re-conversion of already-processed files? (bypass DB check)"
-		} else {
-			question = "Re-compress files that are already HEVC/H.265?"
-		}
-		b.WriteString(setupStyleLabel.Render(question) + "\n")
-		b.WriteString(setupStyleHint.Render("  [y] Yes   [n / Enter] No   [Esc] cancel") + "\n")
-
+		b.WriteString(m.viewStepYesNo())
 	case stepParallelJobs:
-		b.WriteString(m.renderAnsweredAbove())
-		b.WriteString(setupStyleLabel.Render(
-			fmt.Sprintf("Parallel conversion jobs  (recommended: %d)", m.opts.DefaultParallel),
-		) + "\n")
-		b.WriteString(setupStyleHint.Render("  Enter a number 1–8, or press Enter to accept the recommendation") + "\n  ")
-		b.WriteString(m.ti.View() + "\n")
-
+		b.WriteString(m.viewStepParallelJobs())
 	case stepOutputDrive:
-		b.WriteString(m.renderAnsweredAbove())
-		if !m.driveYesAsked {
-			b.WriteString(setupStyleLabel.Render("Write output to a different drive?") + "\n")
-			b.WriteString(setupStyleHint.Render("  [y] Yes   [n / Enter] No — use source drive   [Esc] cancel") + "\n")
-		} else {
-			b.WriteString(setupStyleLabel.Render("Select output drive") + "\n")
-			b.WriteString(setupStyleHint.Render("  [↑/k] [↓/j] navigate   [Enter] confirm   [Esc] use source drive") + "\n\n")
-			for i, d := range m.opts.AvailableDrives {
-				cursor := "  "
-				style := setupStyleDriveNormal
-				if i == m.driveCursor {
-					cursor = setupStyleCursor.Render("❯ ")
-					style = setupStyleDriveSelected
-				}
-				line := truncate(cursor+d, inner)
-				b.WriteString(style.Render(line) + "\n")
-			}
-		}
+		b.WriteString(m.viewStepOutputDrive(w))
 	}
 
 	return setupStyleBorder.Width(w).MaxHeight(m.height).Render(b.String()) + "\n"
-}
-
-// renderAnsweredAbove renders a compact summary of questions already answered.
-func (m *setupModel) renderAnsweredAbove() string {
-	var b strings.Builder
-	if !m.opts.NeedFolder && len(m.answers.Paths) == 0 {
-		// paths came from CLI — nothing to show
-	} else if len(m.answers.Paths) > 0 {
-		label := "Paths"
-		if len(m.answers.Paths) == 1 {
-			label = "Folder"
-		}
-		b.WriteString(setupStyleHint.Render("  "+label+"  ") +
-			setupStyleAnswer.Render(strings.Join(m.answers.Paths, ", ")) + "\n")
-	}
-	if m.step > stepBypass && m.opts.NeedBypass {
-		val := "No"
-		if m.answers.Bypass {
-			val = "Yes"
-		}
-		b.WriteString(setupStyleHint.Render("  Bypass DB check  ") +
-			setupStyleAnswer.Render(val) + "\n")
-	}
-	if m.step > stepForceHevc && m.opts.NeedForceHevc {
-		val := "No"
-		if m.answers.ForceHevc {
-			val = "Yes"
-		}
-		b.WriteString(setupStyleHint.Render("  Re-compress HEVC  ") +
-			setupStyleAnswer.Render(val) + "\n")
-	}
-	if b.Len() > 0 {
-		b.WriteString("\n")
-	}
-	return b.String()
 }

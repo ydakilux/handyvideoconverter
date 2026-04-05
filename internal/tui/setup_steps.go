@@ -1,0 +1,225 @@
+package tui
+
+import (
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+func (m setupModel) updateStepStartup(msg tea.KeyMsg) (setupModel, tea.Cmd) {
+	if msg.String() == "ctrl+c" || msg.String() == "esc" {
+		m.answers.Cancelled = true
+		m.step = stepDone
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m setupModel) updateStepConfirm(msg tea.KeyMsg) (setupModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter", " ":
+		m.answers.Paths = make([]string, len(m.selectedPaths))
+		copy(m.answers.Paths, m.selectedPaths)
+		return m.advanceAndReturn()
+	case "backspace", "b":
+		m.step = stepFolder
+		return m, nil
+	case "ctrl+c", "esc", "q":
+		m.answers.Cancelled = true
+		m.step = stepDone
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m setupModel) updateStepYesNo(msg tea.KeyMsg) (setupModel, tea.Cmd) {
+	switch strings.ToLower(msg.String()) {
+	case "y":
+		if m.step == stepBypass {
+			m.answers.Bypass = true
+		} else {
+			m.answers.ForceHevc = true
+		}
+		return m.advanceAndReturn()
+	case "n", "enter":
+		return m.advanceAndReturn()
+	case "ctrl+c", "esc":
+		m.answers.Cancelled = true
+		m.step = stepDone
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m setupModel) updateStepParallelJobs(msg tea.KeyMsg) (setupModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		n := m.opts.DefaultParallel
+		if v, err := strconv.Atoi(strings.TrimSpace(m.ti.Value())); err == nil && v >= 1 {
+			if v > 8 {
+				v = 8
+			}
+			n = v
+		}
+		m.answers.ParallelJobs = n
+		return m.advanceAndReturn()
+	case "ctrl+c", "esc":
+		m.answers.Cancelled = true
+		m.step = stepDone
+		return m, nil
+	}
+	// Fall through to text-input delegation.
+	var cmd tea.Cmd
+	m.ti, cmd = m.ti.Update(msg)
+	return m, cmd
+}
+
+func (m setupModel) updateStepOutputDrive(msg tea.KeyMsg) (setupModel, tea.Cmd) {
+	if !m.driveYesAsked {
+		switch strings.ToLower(msg.String()) {
+		case "y":
+			m.driveYesAsked = true
+			m.driveWantsDiff = true
+			return m, nil
+		case "n", "enter":
+			m.answers.OutputDrive = ""
+			return m.advanceAndReturn()
+		case "ctrl+c", "esc":
+			m.answers.Cancelled = true
+			m.step = stepDone
+			return m, nil
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "up", "k":
+		if m.driveCursor > 0 {
+			m.driveCursor--
+		}
+	case "down", "j":
+		if m.driveCursor < len(m.opts.AvailableDrives)-1 {
+			m.driveCursor++
+		}
+	case "enter":
+		if len(m.opts.AvailableDrives) > 0 {
+			selected := m.opts.AvailableDrives[m.driveCursor]
+			m.answers.OutputDrive = strings.SplitN(selected, " ", 2)[0]
+		}
+		return m.advanceAndReturn()
+	case "esc":
+		m.answers.OutputDrive = ""
+		return m.advanceAndReturn()
+	case "ctrl+c":
+		m.answers.Cancelled = true
+		m.step = stepDone
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m setupModel) updateStepFolder(msg tea.Msg) (setupModel, tea.Cmd) {
+	if km, isKey := msg.(tea.KeyMsg); isKey {
+		// Drive-switcher overlay takes priority.
+		if m.fpDriveOverlay {
+			switch km.String() {
+			case "up", "k":
+				if m.fpDriveCursor > 0 {
+					m.fpDriveCursor--
+				}
+			case "down", "j":
+				if m.fpDriveCursor < len(m.opts.AvailableDrives)-1 {
+					m.fpDriveCursor++
+				}
+			case "enter":
+				return m, m.jumpToDrive()
+			case "tab", "esc":
+				m.fpDriveOverlay = false
+			case "ctrl+c":
+				m.answers.Cancelled = true
+				m.step = stepDone
+				return m, nil
+			}
+			return m, nil // swallow all keys while overlay is open
+		}
+		// Normal folder-picker keys.
+		switch km.String() {
+		case "tab":
+			if len(m.opts.AvailableDrives) > 0 {
+				m.fpDriveOverlay = true
+				m.fpDriveCursor = 0
+				cur := strings.ToUpper(m.fp.CurrentDirectory)
+				for i, d := range m.opts.AvailableDrives {
+					if strings.HasPrefix(cur, strings.ToUpper(strings.SplitN(d, " ", 2)[0])) {
+						m.fpDriveCursor = i
+						break
+					}
+				}
+			}
+			return m, nil
+		case "ctrl+c":
+			m.answers.Cancelled = true
+			m.step = stepDone
+			return m, nil
+		case "q":
+			m.answers.Cancelled = true
+			m.step = stepDone
+			return m, nil
+		case " ":
+			if len(m.fpFiles) == 0 {
+				return m, nil
+			}
+			entry := m.fpFiles[m.fpCursor]
+			full := filepath.Join(m.fp.CurrentDirectory, entry.Name())
+			m.selectedPaths = togglePath(m.selectedPaths, full)
+			m.syncFpHeight()
+			return m, nil
+		case "c":
+			if len(m.selectedPaths) > 0 {
+				m.scan = scanPaths(m.selectedPaths, m.opts.VideoExtensions)
+				m.advance() // → stepConfirm
+				return m, nil
+			}
+			return m, nil
+		case "delete", "d":
+			if len(m.selectedPaths) > 0 {
+				m.selectedPaths = m.selectedPaths[:len(m.selectedPaths)-1]
+				m.syncFpHeight()
+			}
+			return m, nil
+		case "j", "down", "ctrl+n":
+			if m.fpCursor < len(m.fpFiles)-1 {
+				m.fpCursor++
+			}
+		case "k", "up", "ctrl+p":
+			if m.fpCursor > 0 {
+				m.fpCursor--
+			}
+		case "g":
+			m.fpCursor = 0
+		case "G":
+			if len(m.fpFiles) > 0 {
+				m.fpCursor = len(m.fpFiles) - 1
+			}
+		case "J", "pgdown":
+			m.fpCursor += m.fp.Height
+			if m.fpCursor >= len(m.fpFiles) {
+				m.fpCursor = len(m.fpFiles) - 1
+			}
+		case "K", "pgup":
+			m.fpCursor -= m.fp.Height
+			if m.fpCursor < 0 {
+				m.fpCursor = 0
+			}
+		}
+	}
+	// Delegate to filepicker sub-component for all message types.
+	var cmd tea.Cmd
+	prevDir := m.fp.CurrentDirectory
+	m.fp, cmd = m.fp.Update(msg)
+	if m.fp.CurrentDirectory != prevDir {
+		m.fpLoadDir(m.fp.CurrentDirectory)
+	}
+	return m, cmd
+}
