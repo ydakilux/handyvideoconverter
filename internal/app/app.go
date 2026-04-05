@@ -46,6 +46,14 @@ type Options struct {
 	Paths          []string
 }
 
+// setupResult carries the values produced by runSetupPhase that the
+// conversion phase needs.
+type setupResult struct {
+	paths     []string
+	bypass    bool
+	forceHevc bool
+}
+
 // App holds all runtime state, replacing the package-level globals in main.go.
 type App struct {
 	opts            Options
@@ -61,6 +69,7 @@ type App struct {
 	encoderRegistry *encoder.Registry
 	fbManager       *fallback.FallbackManager
 	ui              *tui.UI
+	pipeline        *pipeline.Pipeline // stored so the TUI control callback can call Stop()
 	pipelineCtrl    *pipeline.Controller
 	outputDrive     string          // "" = use source drive
 	gpuBenchmarks   map[int]float64 // gpuIndex → FPS (nil for single-GPU or CPU)
@@ -81,24 +90,35 @@ func New(opts Options) (*App, error) {
 // Run executes the full conversion workflow. It is the single entry point
 // called by main after flag parsing.
 func (a *App) Run() error {
-	if err := a.loadConfig(); err != nil {
+	sr, err := a.runSetupPhase()
+	if err != nil {
 		return err
 	}
-	// Phase 1: early logger buffers in memory until the TUI is ready.
+
+	if err := a.runConversionPhase(sr); err != nil {
+		return err
+	}
+
+	a.runSummaryPhase()
+	return nil
+}
+
+func (a *App) runSetupPhase() (setupResult, error) {
+	if err := a.loadConfig(); err != nil {
+		return setupResult{}, err
+	}
+
 	a.log, a.logFlush = logging.SetupEarlyLogging(a.config.LogLevel)
 
 	ffmpegExe := cfgpkg.ResolveExecutable(a.config.FFmpegPath, cfgpkg.ExeName("ffmpeg"), a.execDir)
 	if ffmpegExe == "" {
 		if err := a.promptInstallFFmpeg(); err != nil {
-			return err
+			return setupResult{}, err
 		}
 	}
 
 	a.fbManager = fallback.NewFallbackManager(!a.config.NonInteractive, os.Stdin, a.log)
 
-	// ── Start the Bubble Tea program (setup phase first) ─────────────────────
-	// The startup channel is closed once encoder detection + benchmarks finish,
-	// which triggers the TUI to transition from the spinner screen to questions.
 	startupCh := make(chan string, 16)
 
 	setupOpts := tui.SetupOptions{
@@ -113,42 +133,34 @@ func (a *App) Run() error {
 		AvailableDrives:  getAvailableDrives(),
 	}
 
-	var pipeCtrl *pipeline.Controller
-	var pipe *pipeline.Pipeline
 	var answersCh <-chan tui.SetupAnswers
 
 	a.ui, answersCh = tui.New(setupOpts, func(action tui.ControlAction) {
-		if pipeCtrl == nil {
+		if a.pipelineCtrl == nil {
 			return
 		}
 		switch action {
 		case tui.ActionPause:
-			if pipeCtrl.IsPaused() {
-				pipeCtrl.Resume()
+			if a.pipelineCtrl.IsPaused() {
+				a.pipelineCtrl.Resume()
 				a.ui.SendControlState(false, tui.StopKindNone)
 			} else {
-				pipeCtrl.Pause()
+				a.pipelineCtrl.Pause()
 				a.ui.SendControlState(true, tui.StopKindNone)
 			}
 		case tui.ActionStopAfterCurrent:
-			pipeCtrl.StopAfterCurrent()
+			a.pipelineCtrl.StopAfterCurrent()
 			a.ui.SendControlState(false, tui.StopKindAfterCurrent)
 		case tui.ActionStopNow:
-			pipeCtrl.StopNow()
-			if pipe != nil {
-				pipe.Stop()
+			a.pipelineCtrl.StopNow()
+			if a.pipeline != nil {
+				a.pipeline.Stop()
 			}
 			a.ui.SendControlState(false, tui.StopKindNow)
 		}
 	})
 
-	// ── Encoder detection + benchmarks in background ─────────────────────────
-	// Runs while the TUI shows the startup spinner; sends progress lines to
-	// startupCh so the user can see what's happening.  Closing startupCh signals
-	// that startup is complete and the TUI can show the setup questions.
-	var (
-		startupErrCh = make(chan error, 1)
-	)
+	startupErrCh := make(chan error, 1)
 	go func() {
 		defer close(startupCh)
 
@@ -163,32 +175,22 @@ func (a *App) Run() error {
 			startupErrCh <- err
 			return
 		}
-		// Update the DefaultParallel in opts now that benchmarks may have changed it.
-		// We can't mutate setupOpts at this point, but the TUI will use the value
-		// from answers.ParallelJobs if we set it; so store it for the hint below.
 		startupCh <- fmt.Sprintf("Ready  (parallel jobs: %d)", a.config.MaxParallelJobs)
 		startupErrCh <- nil
 	}()
 
-	// ── Wait for setup answers ───────────────────────────────────────────────
 	answers := <-answersCh
 	if answers.Cancelled {
 		a.ui.Wait()
-		// Drain the startup error channel so the goroutine can exit cleanly.
 		go func() { <-startupErrCh }()
-		return fmt.Errorf("setup cancelled by user")
+		return setupResult{}, fmt.Errorf("setup cancelled by user")
 	}
 
-	// Check if the background startup goroutine hit an error.
 	if err := <-startupErrCh; err != nil {
 		a.ui.Wait()
-		return err
+		return setupResult{}, err
 	}
 
-	// Update DefaultParallel hint in case benchmarks changed it.
-	// (The user answered before benchmarks finished only if startup was very
-	// fast and the hint was stale — acceptable; the benchmark result takes
-	// priority below.)
 	if answers.ParallelJobs > 0 {
 		a.config.MaxParallelJobs = answers.ParallelJobs
 	} else if a.opts.ParallelJobs > 0 {
@@ -197,8 +199,6 @@ func (a *App) Run() error {
 		}
 		a.config.MaxParallelJobs = a.opts.ParallelJobs
 	}
-	bypass := a.opts.Bypass || answers.Bypass
-	forceHevc := a.opts.ForceHevc || answers.ForceHevc
 	if answers.OutputDrive != "" {
 		a.outputDrive = answers.OutputDrive
 	}
@@ -208,9 +208,17 @@ func (a *App) Run() error {
 	}
 	if len(paths) == 0 {
 		a.ui.Wait()
-		return fmt.Errorf("no input path provided")
+		return setupResult{}, fmt.Errorf("no input path provided")
 	}
-	// Phase 2: flush buffered early logs, open real log file, route through TUI.
+
+	return setupResult{
+		paths:     paths,
+		bypass:    a.opts.Bypass || answers.Bypass,
+		forceHevc: a.opts.ForceHevc || answers.ForceHevc,
+	}, nil
+}
+
+func (a *App) runConversionPhase(sr setupResult) error {
 	if a.logFlush != nil {
 		a.log, a.logCleanup = a.logFlush(a.config.Seq.ServerURL, a.config.Seq.APIKey, a.execDir, a.config.Seq.Enabled, a.ui.Writer())
 		a.logFlush = nil
@@ -220,7 +228,7 @@ func (a *App) Run() error {
 	a.stats.TouchedDrives = make(map[string]bool)
 
 	a.log.Info("Discovering files...")
-	files, fileToBaseDir := discovery.DiscoverFiles(paths, a.config.FileExtensions, a.log)
+	files, fileToBaseDir := discovery.DiscoverFiles(sr.paths, a.config.FileExtensions, a.log)
 	if len(files) == 0 {
 		a.log.Info("No files found")
 		return nil
@@ -249,9 +257,8 @@ func (a *App) Run() error {
 	}
 
 	ctx := context.Background()
-	pipe = pipeline.NewPipeline(ctx, numWorkers, bufSize)
-	pipeCtrl = pipe.Controller()
-	a.pipelineCtrl = pipeCtrl
+	a.pipeline = pipeline.NewPipeline(ctx, numWorkers, bufSize)
+	a.pipelineCtrl = a.pipeline.Controller()
 
 	if numWorkers > 1 {
 		a.log.Infof("Parallel mode: %d concurrent jobs", numWorkers)
@@ -266,12 +273,12 @@ func (a *App) Run() error {
 		DB:                  a.dbManager,
 		UI:                  a.ui,
 		Stats:               &a.stats,
-		Ctrl:                pipeCtrl,
+		Ctrl:                a.pipelineCtrl,
 		OutputDriveOverride: a.outputDrive,
 		Log:                 a.log,
 	}
 
-	pipe.Start(func(ctx context.Context, job types.Job) pipeline.ConversionResult {
+	a.pipeline.Start(func(ctx context.Context, job types.Job) pipeline.ConversionResult {
 		conv.Process(ctx, job, a.opts.DryRun)
 		a.dbManager.SaveAll()
 		return pipeline.ConversionResult{Job: job}
@@ -280,7 +287,7 @@ func (a *App) Run() error {
 	a.ui.StartTimer()
 
 	go func() {
-		discovery.Produce(files, fileToBaseDir, pipe, bypass, forceHevc, discovery.ProducerConfig{
+		discovery.Produce(files, fileToBaseDir, a.pipeline, sr.bypass, sr.forceHevc, discovery.ProducerConfig{
 			Config:      &a.config,
 			ExecDir:     a.execDir,
 			DBManager:   a.dbManager,
@@ -290,28 +297,23 @@ func (a *App) Run() error {
 		})
 	}()
 
-	for range pipe.Results() {
+	for range a.pipeline.Results() {
 	}
 
 	a.dbManager.SaveAll()
+	return nil
+}
 
+func (a *App) runSummaryPhase() {
 	elapsed := a.ui.Elapsed()
 	tuiSummary := a.buildStatsSummary(elapsed)
 
-	// Write the summary to the log file before tearing down the TUI so it is
-	// always persisted regardless of how the user exits.
 	for _, line := range tuiSummary {
 		a.log.Info(line)
 	}
 
-	// Show the summary banner inside the TUI log viewport and wait for the user
-	// to press Enter/q before tearing down the alt-screen.
-	// In non-interactive / plain-text mode ShowSummary falls back to printing
-	// directly and returns immediately.
 	a.ui.ShowSummary(tuiSummary)
 
-	// After ShowSummary the alt-screen is gone — safe to write to stdout.
-	// Print the box-art version for readability in the plain terminal.
 	boxSummary := a.buildStatsSummaryBox(elapsed)
 	a.ui.PrintSummary(boxSummary)
 
@@ -322,7 +324,6 @@ func (a *App) Run() error {
 	if a.config.NonInteractive {
 		fmt.Printf("ELAPSED=%s\n", fileutil.FmtElapsed(elapsed))
 	}
-	return nil
 }
 
 // ── private helpers ────────────────────────────────────────────────────────────
