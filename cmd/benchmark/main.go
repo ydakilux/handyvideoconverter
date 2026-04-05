@@ -16,10 +16,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"video-converter/internal/config"
+	"video-converter/internal/fileutil"
 )
 
 type result struct {
@@ -82,11 +84,11 @@ func main() {
 		r := result{jobs: jobs, wallMs: wall}
 		if runErr != nil {
 			r.err = runErr.Error()
-			r.elapsed = fmt.Sprintf("wall %s", fmtWall(wall))
-			fmt.Printf("FAILED (%v)  wall=%s\n", runErr, fmtWall(wall))
+			r.elapsed = fmt.Sprintf("wall %s", fmtMs(wall))
+			fmt.Printf("FAILED (%v)  wall=%s\n", runErr, fmtMs(wall))
 		} else {
 			r.elapsed = elapsed
-			fmt.Printf("ELAPSED=%s  wall=%s\n", elapsed, fmtWall(wall))
+			fmt.Printf("ELAPSED=%s  wall=%s\n", elapsed, fmtMs(wall))
 		}
 		results = append(results, r)
 	}
@@ -101,7 +103,7 @@ func main() {
 		if r.err != "" {
 			status = "ERROR"
 		}
-		fmt.Printf("│ %-6d │ %-12s │ %-12s │\n", r.jobs, status, fmtWall(r.wallMs))
+		fmt.Printf("│ %-6d │ %-12s │ %-12s │\n", r.jobs, status, fmtMs(r.wallMs))
 	}
 	fmt.Println("└────────┴──────────────┴──────────────┘")
 
@@ -127,10 +129,7 @@ func resolveBinary(override string) (string, error) {
 	}
 
 	// Try exe name based on platform
-	exeName := "video-converter"
-	if runtime.GOOS == "windows" {
-		exeName = "video-converter.exe"
-	}
+	exeName := config.ExeName("video-converter")
 
 	// 1. Check same directory as this process's executable
 	self, err := os.Executable()
@@ -216,19 +215,8 @@ func runConverter(bin string, args []string) (elapsed string, err error) {
 	return elapsed, nil
 }
 
-// fmtWall formats milliseconds as a human-readable string.
-func fmtWall(ms int64) string {
-	d := time.Duration(ms) * time.Millisecond
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	s := int(d.Seconds()) % 60
-	if h > 0 {
-		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
-	}
-	if m > 0 {
-		return fmt.Sprintf("%dm %02ds", m, s)
-	}
-	return fmt.Sprintf("%ds", s)
+func fmtMs(ms int64) string {
+	return fileutil.FmtElapsed(time.Duration(ms) * time.Millisecond)
 }
 
 // writeCSV writes benchmark results to a CSV file.

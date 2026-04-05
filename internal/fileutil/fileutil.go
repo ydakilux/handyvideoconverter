@@ -137,7 +137,7 @@ func FormatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-// FmtElapsed formats a duration as "Xh MMm SSs" or "Mm SSs".
+// FmtElapsed formats a duration as "Xh MMm SSs", "Mm SSs", or "Xs".
 func FmtElapsed(d time.Duration) string {
 	d = d.Round(time.Second)
 	h := int(d.Hours())
@@ -146,7 +146,10 @@ func FmtElapsed(d time.Duration) string {
 	if h > 0 {
 		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
 	}
-	return fmt.Sprintf("%dm %02ds", m, s)
+	if m > 0 {
+		return fmt.Sprintf("%dm %02ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
 }
 
 // TruncateString shortens s to maxLen characters, appending "..." if truncated.

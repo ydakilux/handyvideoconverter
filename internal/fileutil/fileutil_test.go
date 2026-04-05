@@ -1,6 +1,7 @@
 package fileutil_test
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -167,9 +168,12 @@ func TestFmtElapsed(t *testing.T) {
 		d    time.Duration
 		want string
 	}{
-		{45 * time.Second, "0m 45s"},
-		{90 * time.Second, "1m 30s"},
+		{0, "0s"},
+		{5 * time.Second, "5s"},
+		{45 * time.Second, "45s"},
+		{59 * time.Second, "59s"},
 		{60 * time.Second, "1m 00s"},
+		{90 * time.Second, "1m 30s"},
 		{time.Hour + 2*time.Minute + 3*time.Second, "1h 02m 03s"},
 		{2*time.Hour + 0*time.Minute + 0*time.Second, "2h 00m 00s"},
 	}
@@ -201,5 +205,105 @@ func TestTruncateString(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("TruncateString(%q, %d) = %q, want %q", tc.s, tc.maxLen, got, tc.want)
 		}
+	}
+}
+
+func TestGetFileHash_FullConsistency(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	data := []byte("deterministic content for hash test")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	h1, err := fileutil.GetFileHash(path, false)
+	if err != nil {
+		t.Fatalf("first hash: %v", err)
+	}
+	h2, err := fileutil.GetFileHash(path, false)
+	if err != nil {
+		t.Fatalf("second hash: %v", err)
+	}
+	if h1 != h2 {
+		t.Errorf("full hash not consistent: %q vs %q", h1, h2)
+	}
+	if len(h1) == 0 {
+		t.Error("full hash is empty")
+	}
+}
+
+func TestGetFileHash_PartialConsistency(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	data := []byte("deterministic content for partial hash test")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	h1, err := fileutil.GetFileHash(path, true)
+	if err != nil {
+		t.Fatalf("first hash: %v", err)
+	}
+	h2, err := fileutil.GetFileHash(path, true)
+	if err != nil {
+		t.Fatalf("second hash: %v", err)
+	}
+	if h1 != h2 {
+		t.Errorf("partial hash not consistent: %q vs %q", h1, h2)
+	}
+}
+
+func TestGetFileHash_DifferentFilesDifferentHashes(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.bin")
+	pathB := filepath.Join(dir, "b.bin")
+	if err := os.WriteFile(pathA, []byte("content A"), 0644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(pathB, []byte("content B"), 0644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+
+	hA, err := fileutil.GetFileHash(pathA, false)
+	if err != nil {
+		t.Fatalf("hash A: %v", err)
+	}
+	hB, err := fileutil.GetFileHash(pathB, false)
+	if err != nil {
+		t.Fatalf("hash B: %v", err)
+	}
+	if hA == hB {
+		t.Errorf("different files produced same hash: %q", hA)
+	}
+}
+
+func TestGetFileHash_PartialVsFullDiffer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	data := make([]byte, 1024)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	full, err := fileutil.GetFileHash(path, false)
+	if err != nil {
+		t.Fatalf("full hash: %v", err)
+	}
+	partial, err := fileutil.GetFileHash(path, true)
+	if err != nil {
+		t.Fatalf("partial hash: %v", err)
+	}
+	if full == partial {
+		t.Error("partial and full hash should differ (partial includes file size in hash)")
+	}
+}
+
+func TestGetFileHash_NonexistentFile(t *testing.T) {
+	_, err := fileutil.GetFileHash(filepath.Join(t.TempDir(), "missing.bin"), false)
+	if err == nil {
+		t.Error("expected error for non-existent file")
 	}
 }
