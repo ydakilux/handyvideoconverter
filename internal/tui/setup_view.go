@@ -25,7 +25,11 @@ func (m setupModel) viewStepFolder(w int) string {
 	inner := w - 4
 	var b strings.Builder
 	b.WriteString(setupStyleLabel.Render("Select input folder") + "\n")
-	if m.fpDriveOverlay {
+	if m.fpGotoOverlay {
+		hint := setupStyleHint.Render("[Enter] go   [Esc] cancel")
+		b.WriteString(hint + "\n\n")
+		b.WriteString(setupStyleHint.Render("  Path: ") + m.fpGotoInput.View() + "\n")
+	} else if m.fpDriveOverlay {
 		hint := setupStyleHint.Render("[↑/k][↓/j] navigate drives   [Enter] jump   [Tab/Esc] close")
 		b.WriteString(hint + "\n")
 		b.WriteString(setupStyleCurrent.Render("  "+m.fp.CurrentDirectory) + "\n\n")
@@ -47,7 +51,7 @@ func (m setupModel) viewStepFolder(w int) string {
 		if len(m.selectedPaths) > 0 {
 			confirmHint = "  [c] Confirm"
 		}
-		hint := setupStyleHint.Render("[Space] toggle highlighted  [←/h] up  [→/l/Enter] open  [d] remove last  [q] cancel" + tabHint + confirmHint)
+		hint := setupStyleHint.Render("[Space] toggle highlighted  [←/h] up  [→/l/Enter] open  [d] remove last  [q] cancel" + tabHint + "  [Ctrl+G] go to path" + confirmHint)
 		b.WriteString(hint + "\n")
 		b.WriteString(setupStyleCurrent.Render("  "+m.fp.CurrentDirectory) + "\n\n")
 		b.WriteString(m.fp.View())

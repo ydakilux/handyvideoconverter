@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -121,6 +122,37 @@ func (m setupModel) updateStepOutputDrive(msg tea.KeyMsg) (setupModel, tea.Cmd) 
 
 func (m setupModel) updateStepFolder(msg tea.Msg) (setupModel, tea.Cmd) {
 	if km, isKey := msg.(tea.KeyMsg); isKey {
+		// Goto-directory overlay takes highest priority.
+		if m.fpGotoOverlay {
+			switch km.String() {
+			case "enter":
+				raw := strings.TrimSpace(m.fpGotoInput.Value())
+				if raw == "" {
+					m.fpGotoOverlay = false
+					return m, nil
+				}
+				target := filepath.Clean(raw)
+				info, err := os.Stat(target)
+				if err != nil || !info.IsDir() {
+					return m, nil
+				}
+				m.fpGotoOverlay = false
+				m.fp.CurrentDirectory = target
+				m.fp = resetFilepickerView(m.fp)
+				m.fpLoadDir(target)
+				return m, m.fp.Init()
+			case "esc":
+				m.fpGotoOverlay = false
+				return m, nil
+			case "ctrl+c":
+				m.answers.Cancelled = true
+				m.step = stepDone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.fpGotoInput, cmd = m.fpGotoInput.Update(msg)
+			return m, cmd
+		}
 		// Drive-switcher overlay takes priority.
 		if m.fpDriveOverlay {
 			switch km.String() {
@@ -157,6 +189,12 @@ func (m setupModel) updateStepFolder(msg tea.Msg) (setupModel, tea.Cmd) {
 					}
 				}
 			}
+			return m, nil
+		case "ctrl+g":
+			m.fpGotoOverlay = true
+			m.fpGotoInput.SetValue(m.fp.CurrentDirectory)
+			m.fpGotoInput.CursorEnd()
+			m.fpGotoInput.Focus()
 			return m, nil
 		case "ctrl+c":
 			m.answers.Cancelled = true

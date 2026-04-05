@@ -130,6 +130,10 @@ type setupModel struct {
 	fpDriveOverlay bool
 	fpDriveCursor  int
 
+	// goto-directory overlay (shown inside stepFolder via Ctrl+G)
+	fpGotoOverlay bool
+	fpGotoInput   textinput.Model
+
 	// stepConfirm
 	scan confirmScan
 
@@ -181,7 +185,12 @@ func newSetupModel(opts SetupOptions) setupModel {
 	fp.KeyMap.Select.SetKeys(" ")                           // Space = confirm dir; Enter = navigate in
 	fp.KeyMap.Back.SetKeys("h", "backspace", "left", "esc") // keep esc for Back (not cancel)
 
-	m := setupModel{opts: opts, fp: fp, ti: ti}
+	gotoInput := textinput.New()
+	gotoInput.CharLimit = 260
+	gotoInput.Width = 60
+	gotoInput.Placeholder = startDir
+
+	m := setupModel{opts: opts, fp: fp, ti: ti, fpGotoInput: gotoInput}
 	m.fpLoadDir(startDir)
 
 	// If a startup channel is provided, always begin at stepStartup.
