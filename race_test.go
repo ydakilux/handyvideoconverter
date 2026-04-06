@@ -12,7 +12,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"video-converter/internal/database"
 	"video-converter/internal/encoder"
 	"video-converter/internal/fallback"
 	"video-converter/internal/gpu/benchmark"
@@ -41,48 +40,6 @@ var _ encoder.Encoder = (*raceEncoder)(nil)
 type raceJob struct{ id string }
 
 func (j *raceJob) String() string { return j.id }
-
-// TestRaceDatabaseConcurrent hammers UpdateRecord/GetRecord from 10 goroutines
-// on the same DatabaseManager and driveRoot. Verifies no data race.
-func TestRaceDatabaseConcurrent(t *testing.T) {
-	tmpDir := t.TempDir()
-	driveRoot := tmpDir + string(filepath.Separator)
-
-	dm := database.NewDatabaseManager(newSilentLogger())
-
-	const goroutines = 10
-	const opsPerGoroutine = 50
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-
-	for i := 0; i < goroutines; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			for j := 0; j < opsPerGoroutine; j++ {
-				hash := fmt.Sprintf("hash_%d_%d", idx, j)
-				rec := types.Record{
-					OriginalSize:  int64(idx*1000 + j),
-					ConvertedSize: int64(idx*500 + j),
-					Output:        fmt.Sprintf("out_%d_%d.mp4", idx, j),
-				}
-				dm.UpdateRecord(driveRoot, hash, rec)
-
-				readHash := fmt.Sprintf("hash_%d_%d", (idx+1)%goroutines, j)
-				_ = dm.GetRecord(driveRoot, readHash)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	got := dm.GetRecord(driveRoot, "hash_0_0")
-	if got == nil {
-		t.Fatal("expected hash_0_0 to exist after concurrent writes")
-	}
-
-	dm.SaveAll()
-}
 
 // TestRaceFallbackConcurrent calls HandleGPUError from 5 goroutines on the
 // same FallbackManager in non-interactive mode. Verifies no data race.

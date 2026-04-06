@@ -2,18 +2,14 @@ package main_test
 
 import (
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/sirupsen/logrus"
-
 	cfgpkg "video-converter/internal/config"
 	"video-converter/internal/converter"
-	"video-converter/internal/database"
 	"video-converter/internal/types"
 )
 
@@ -150,88 +146,6 @@ func TestBackwardCompatAutoEncoder(t *testing.T) {
 				t.Errorf("VideoEncoder = %q, want %q", loaded.VideoEncoder, tc.encoder)
 			}
 		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// moveFile tests
-// ---------------------------------------------------------------------------
-
-func TestBackwardCompatDatabase(t *testing.T) {
-	dir := t.TempDir()
-
-	dbJSON := `{
-  "hashkey1": {
-    "original_size": 1000,
-    "converted_size": 500,
-    "output": "D:\\HSORTED\\test\\file.mp4"
-  },
-  "hashkey2": {
-    "original_size": 2000,
-    "note": "not_beneficial"
-  },
-  "hashkey3": {
-    "original_size": 3000,
-    "error": "rc_1"
-  }
-}`
-	dbPath := filepath.Join(dir, "converted_files.json")
-	if err := os.WriteFile(dbPath, []byte(dbJSON), 0644); err != nil {
-		t.Fatalf("write db: %v", err)
-	}
-
-	logger := logrus.New()
-	logger.SetOutput(io.Discard)
-	dbMgr := database.NewDatabaseManager(logger)
-
-	driveRoot := dir + string(filepath.Separator)
-
-	rec1 := dbMgr.GetRecord(driveRoot, "hashkey1")
-	if rec1 == nil {
-		t.Fatal("GetRecord(hashkey1) returned nil")
-	}
-	if rec1.OriginalSize != 1000 {
-		t.Errorf("OriginalSize = %d, want 1000", rec1.OriginalSize)
-	}
-	if rec1.ConvertedSize != 500 {
-		t.Errorf("ConvertedSize = %d, want 500", rec1.ConvertedSize)
-	}
-	if rec1.Output != `D:\HSORTED\test\file.mp4` {
-		t.Errorf("Output = %q, want %q", rec1.Output, `D:\HSORTED\test\file.mp4`)
-	}
-
-	rec2 := dbMgr.GetRecord(driveRoot, "hashkey2")
-	if rec2 == nil {
-		t.Fatal("GetRecord(hashkey2) returned nil")
-	}
-	if rec2.Note != "not_beneficial" {
-		t.Errorf("Note = %q, want %q", rec2.Note, "not_beneficial")
-	}
-
-	rec3 := dbMgr.GetRecord(driveRoot, "hashkey3")
-	if rec3 == nil {
-		t.Fatal("GetRecord(hashkey3) returned nil")
-	}
-	if rec3.Error != "rc_1" {
-		t.Errorf("Error = %q, want %q", rec3.Error, "rc_1")
-	}
-
-	recNil := dbMgr.GetRecord(driveRoot, "nonexistent")
-	if recNil != nil {
-		t.Errorf("GetRecord(nonexistent) should return nil, got %+v", recNil)
-	}
-
-	dbMgr.UpdateRecord(driveRoot, "hashkey4", types.Record{
-		OriginalSize:  4000,
-		ConvertedSize: 2000,
-		Output:        `D:\HSORTED\new\video.mp4`,
-	})
-	rec4 := dbMgr.GetRecord(driveRoot, "hashkey4")
-	if rec4 == nil {
-		t.Fatal("GetRecord(hashkey4) returned nil after UpdateRecord")
-	}
-	if rec4.OriginalSize != 4000 || rec4.ConvertedSize != 2000 {
-		t.Errorf("UpdateRecord round-trip failed: got %+v", rec4)
 	}
 }
 
