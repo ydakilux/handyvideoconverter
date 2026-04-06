@@ -2,11 +2,13 @@
 package discovery
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -68,7 +70,7 @@ func DiscoverFiles(paths []string, extensions []string, log *logrus.Logger) ([]s
 type ProducerConfig struct {
 	Config      *types.Config
 	ExecDir     string
-	DBManager   *database.DatabaseManager
+	DB          database.Store
 	Stats       *types.Stats
 	FFprobePath string // resolved ffprobe path (may be empty → resolves from ffmpeg dir)
 	Log         *logrus.Logger
@@ -130,7 +132,10 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 			}
 
 			if !bypass {
-				rec := cfg.DBManager.GetRecord(driveRoot, fileHash)
+				rec, err := cfg.DB.GetRecord(context.Background(), driveRoot, fileHash)
+				if err != nil {
+					cfg.Log.Warnf("Failed to check DB for %s: %v", filePath, err)
+				}
 				if rec != nil && (rec.Output != "" || rec.Note == "not_beneficial" || rec.Note == "already_hevc") {
 					cfg.Log.Debugf("Skipping %s (already processed)", filePath)
 					cfg.Stats.IncrFilesSkipped()
@@ -152,11 +157,19 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 
 			if ffmpeg.IsHEVC(videoInfo.Format, videoInfo.CodecID) && !forceHevc {
 				cfg.Log.Infof("Skipping %s (already HEVC)", filePath)
-				cfg.DBManager.UpdateRecord(driveRoot, fileHash, types.Record{
-					OriginalSize:  info.Size(),
-					ConvertedSize: info.Size(),
-					Note:          "already_hevc",
-				})
+				if err := cfg.DB.UpdateRecord(context.Background(), driveRoot, fileHash, types.Record{
+					OriginalSize:    info.Size(),
+					ConvertedSize:   info.Size(),
+					Note:            "already_hevc",
+					SourceCodec:     videoInfo.CodecID,
+					SourceContainer: strings.ToLower(filepath.Ext(filePath)),
+					SourcePath:      filePath,
+					Width:           videoInfo.Width,
+					Height:          videoInfo.Height,
+					ConvertedAt:     time.Now().UTC().Format(time.RFC3339),
+				}); err != nil {
+					cfg.Log.Warnf("Failed to update already_hevc record for %s: %v", filePath, err)
+				}
 				cfg.Stats.IncrFilesSkipped()
 				continue
 			}

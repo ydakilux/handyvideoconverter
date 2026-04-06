@@ -43,6 +43,7 @@ type Options struct {
 	ParallelJobs   int
 	NonInteractive bool
 	Rebenchmark    bool
+	DBPath         string
 	Paths          []string
 }
 
@@ -63,7 +64,7 @@ type App struct {
 	log             *logrus.Logger
 	logCleanup      func()
 	logFlush        func(serverURL, apiKey, execDir string, seqEnabled bool, w io.Writer) (*logrus.Logger, func())
-	dbManager       *database.DatabaseManager
+	store           database.Store
 	stats           types.Stats
 	selectedEncoder encoder.Encoder
 	encoderRegistry *encoder.Registry
@@ -224,7 +225,16 @@ func (a *App) runConversionPhase(sr setupResult) error {
 		a.logFlush = nil
 	}
 
-	a.dbManager = database.NewDatabaseManager(a.log)
+	dbPath := a.opts.DBPath
+	if dbPath == "" {
+		dbPath = filepath.Join(a.execDir, "conversions.db")
+	}
+	store, err := database.NewSQLiteStore(dbPath, a.log)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer store.Close()
+	a.store = store
 	a.stats.TouchedDrives = make(map[string]bool)
 
 	a.log.Info("Discovering files...")
@@ -270,7 +280,7 @@ func (a *App) runConversionPhase(sr setupResult) error {
 		SelectedEncoder:     a.selectedEncoder,
 		EncoderRegistry:     a.encoderRegistry,
 		FallbackManager:     a.fbManager,
-		DB:                  a.dbManager,
+		DB:                  a.store,
 		UI:                  a.ui,
 		Stats:               &a.stats,
 		Ctrl:                a.pipelineCtrl,
@@ -280,7 +290,6 @@ func (a *App) runConversionPhase(sr setupResult) error {
 
 	a.pipeline.Start(func(ctx context.Context, job types.Job) pipeline.ConversionResult {
 		conv.Process(ctx, job, a.opts.DryRun)
-		a.dbManager.SaveAll()
 		return pipeline.ConversionResult{Job: job}
 	})
 
@@ -290,7 +299,7 @@ func (a *App) runConversionPhase(sr setupResult) error {
 		discovery.Produce(files, fileToBaseDir, a.pipeline, sr.bypass, sr.forceHevc, discovery.ProducerConfig{
 			Config:      &a.config,
 			ExecDir:     a.execDir,
-			DBManager:   a.dbManager,
+			DB:          a.store,
 			Stats:       &a.stats,
 			Log:         a.log,
 			GPUAssigner: gpuAssigner,
@@ -300,7 +309,6 @@ func (a *App) runConversionPhase(sr setupResult) error {
 	for range a.pipeline.Results() {
 	}
 
-	a.dbManager.SaveAll()
 	return nil
 }
 

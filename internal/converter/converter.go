@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -38,7 +39,7 @@ type Converter struct {
 	SelectedEncoder     encoder.Encoder
 	EncoderRegistry     *encoder.Registry
 	FallbackManager     *fallback.FallbackManager
-	DB                  *database.DatabaseManager
+	DB                  database.Store
 	UI                  *tui.UI
 	Stats               *types.Stats
 	Ctrl                *pipeline.Controller
@@ -126,6 +127,7 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 
 	// Run FFmpeg
 	ffmpegExe := config.ResolveExecutable(c.Config.FFmpegPath, config.ExeName("ffmpeg"), c.ExecDir)
+	convStart := time.Now()
 	rc, stderrOut := ffmpeg.Run(ctx, ffmpegExe, args, job.FilePath, job.DurationSeconds, c.Log, onProgress, registerSuspend)
 
 	// GPU fallback
@@ -149,10 +151,19 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 			c.Log.Errorf("FFmpeg stderr: %s", stderrOut)
 		}
 		c.UI.CompleteError(jobID, fmt.Sprintf("✗ FAILED  [%d/%d] %s", job.FileNumber, job.TotalFiles, fileName))
-		c.DB.UpdateRecord(job.DriveRoot, job.FileHash, types.Record{
-			OriginalSize: job.OriginalSize,
-			Error:        fmt.Sprintf("rc_%d", rc),
-		})
+		if err := c.DB.UpdateRecord(ctx, job.DriveRoot, job.FileHash, types.Record{
+			OriginalSize:    job.OriginalSize,
+			Error:           fmt.Sprintf("rc_%d", rc),
+			SourceCodec:     job.CodecID,
+			SourceContainer: strings.ToLower(filepath.Ext(job.FilePath)),
+			SourcePath:      job.FilePath,
+			Width:           job.Width,
+			Height:          job.Height,
+			DurationSecs:    job.DurationSeconds,
+			ConvertedAt:     time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			c.Log.Errorf("Failed to update error record for %s: %v", job.FilePath, err)
+		}
 		os.Remove(tempPath) //nolint:errcheck
 		c.Stats.IncrFilesErrored()
 		return
@@ -196,11 +207,21 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 			return
 		}
 
-		c.DB.UpdateRecord(job.DriveRoot, job.FileHash, types.Record{
-			OriginalSize:  job.OriginalSize,
-			ConvertedSize: newSize,
-			Output:        finalPath,
-		})
+		if err := c.DB.UpdateRecord(ctx, job.DriveRoot, job.FileHash, types.Record{
+			OriginalSize:           job.OriginalSize,
+			ConvertedSize:          newSize,
+			Output:                 finalPath,
+			SourceCodec:            job.CodecID,
+			SourceContainer:        strings.ToLower(filepath.Ext(job.FilePath)),
+			SourcePath:             job.FilePath,
+			Width:                  job.Width,
+			Height:                 job.Height,
+			DurationSecs:           job.DurationSeconds,
+			ConvertedAt:            time.Now().UTC().Format(time.RFC3339),
+			ConversionDurationSecs: time.Since(convStart).Seconds(),
+		}); err != nil {
+			c.Log.Errorf("Failed to update record for %s: %v", job.FilePath, err)
+		}
 
 		c.Stats.AddConverted(true, job.OriginalSize, newSize)
 	} else {
@@ -215,11 +236,21 @@ func (c *Converter) Process(ctx context.Context, job types.Job, dryRun bool) {
 
 		os.Remove(tempPath) //nolint:errcheck
 
-		c.DB.UpdateRecord(job.DriveRoot, job.FileHash, types.Record{
-			OriginalSize:  job.OriginalSize,
-			ConvertedSize: newSize,
-			Note:          "not_beneficial",
-		})
+		if err := c.DB.UpdateRecord(ctx, job.DriveRoot, job.FileHash, types.Record{
+			OriginalSize:           job.OriginalSize,
+			ConvertedSize:          newSize,
+			Note:                   "not_beneficial",
+			SourceCodec:            job.CodecID,
+			SourceContainer:        strings.ToLower(filepath.Ext(job.FilePath)),
+			SourcePath:             job.FilePath,
+			Width:                  job.Width,
+			Height:                 job.Height,
+			DurationSecs:           job.DurationSeconds,
+			ConvertedAt:            time.Now().UTC().Format(time.RFC3339),
+			ConversionDurationSecs: time.Since(convStart).Seconds(),
+		}); err != nil {
+			c.Log.Errorf("Failed to update record for %s: %v", job.FilePath, err)
+		}
 
 		c.Stats.AddConverted(false, job.OriginalSize, job.OriginalSize)
 	}
