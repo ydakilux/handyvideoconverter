@@ -10,7 +10,7 @@
   "ffmpeg_path": "ffmpeg\\bin\\ffmpeg.exe",
   "ffprobe_path": "",
   "temp_directory": "",
-  "video_encoder": "hevc_nvenc",
+  "video_encoder": "auto",
   "quality_preset": "balanced",
   "file_extensions": [
     ".MOV",
