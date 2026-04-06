@@ -44,6 +44,15 @@ type Record struct {
 	Output        string `json:"output,omitempty"`
 	Note          string `json:"note,omitempty"`
 	Error         string `json:"error,omitempty"`
+
+	SourceCodec            string  `json:"source_codec,omitempty"`
+	SourceContainer        string  `json:"source_container,omitempty"`
+	SourcePath             string  `json:"source_path,omitempty"`
+	Width                  int     `json:"width,omitempty"`
+	Height                 int     `json:"height,omitempty"`
+	DurationSecs           float64 `json:"duration_secs,omitempty"`
+	ConvertedAt            string  `json:"converted_at,omitempty"`
+	ConversionDurationSecs float64 `json:"conversion_duration_secs,omitempty"`
 }
 
 // Job represents a conversion job
