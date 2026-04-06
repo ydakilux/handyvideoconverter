@@ -41,7 +41,7 @@ endif
         release release-windows release-linux release-darwin release-all \
         benchmark benchmark-windows benchmark-linux benchmark-darwin benchmark-all \
         test test-verbose test-race test-short test-cover cover cover-html \
-        fmt vet lint tidy clean help
+        fmt vet lint tidy clean download-sample help
 
 all: lint test build  ## Run lint + test + build (auto-detects OS)
 
@@ -106,6 +106,7 @@ benchmark-all: benchmark-windows benchmark-linux benchmark-darwin  ## Build benc
 # Test
 # ──────────────────────────────────────────────────────────────────
 test:  ## Run all tests
+	@go run ./cmd/download-sample --ensure
 	go test ./... -count=1 -timeout 120s
 
 test-verbose:  ## Run tests with verbose output
@@ -161,6 +162,12 @@ clean:  ## Remove build artifacts and coverage files
 	rm -f $(BINARY_WIN) $(BINARY_LINUX) $(BINARY_DARWIN) $(BINARY_DARWIN)-arm64
 	rm -f $(BENCHMARK_WIN) $(BENCHMARK_LINUX) $(BENCHMARK_DARWIN)
 	rm -f $(COVERAGE)
+
+# ──────────────────────────────────────────────────────────────────
+# Sample video download (Big Buck Bunny)
+# ──────────────────────────────────────────────────────────────────
+download-sample:  ## Download Big Buck Bunny sample video (interactive)
+	go run ./cmd/download-sample
 
 # ──────────────────────────────────────────────────────────────────
 # Help

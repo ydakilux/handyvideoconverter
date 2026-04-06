@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,15 +18,48 @@ import (
 const HashChunkSize = 16 * 1024 * 1024 // 16 MB
 
 // GetDriveRoot returns the volume root for filePath.
-// On Windows this is the drive root (e.g. "D:\").
-// On Unix it returns "/" for absolute paths; for paths with no volume it also
-// returns "/".
+// On Windows this is the drive letter root (e.g. "D:\").
+// On Linux/WSL it detects common mount-point patterns so that output
+// directories land next to the source files rather than at "/":
+//
+//   - /mnt/d/Videos/...  -> /mnt/d/
+//   - /media/user/USB/.. -> /media/user/USB/
+//   - /home/user/...     -> /home/user/
+//
+// Falls back to "/" only when no deeper mount-style prefix is found.
 func GetDriveRoot(filePath string) string {
 	vol := filepath.VolumeName(filePath)
-	if vol == "" {
+	if vol != "" {
+		return vol + string(filepath.Separator)
+	}
+
+	if runtime.GOOS == "windows" {
 		return "/"
 	}
-	return vol + string(filepath.Separator)
+
+	clean := filepath.Clean(filePath)
+	if !filepath.IsAbs(clean) {
+		return "/"
+	}
+	parts := strings.Split(clean, "/")
+	// parts[0] is "" for absolute paths (leading /)
+
+	// WSL drive mounts: /mnt/c, /mnt/d, etc. (single-letter)
+	if len(parts) >= 3 && parts[1] == "mnt" && len(parts[2]) == 1 {
+		return "/" + parts[1] + "/" + parts[2] + "/"
+	}
+
+	// /media/<user>/<device> — removable media on Linux
+	if len(parts) >= 4 && parts[1] == "media" {
+		return "/" + parts[1] + "/" + parts[2] + "/" + parts[3] + "/"
+	}
+
+	// /home/<user>, /root, /tmp, /opt — use first two levels
+	if len(parts) >= 3 {
+		return "/" + parts[1] + "/" + parts[2] + "/"
+	}
+
+	return "/"
 }
 
 // GetParentFolderName returns the immediate parent folder name of filePath

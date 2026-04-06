@@ -27,14 +27,21 @@ func TestGetDriveRoot(t *testing.T) {
 			}
 		}
 	} else {
-		for _, input := range []string{
-			"/mnt/videos/foo.mp4",
-			"/home/user/file.mkv",
-			"/",
-		} {
-			got := fileutil.GetDriveRoot(input)
-			if got != "/" {
-				t.Errorf("GetDriveRoot(%q) = %q, want \"/\"", input, got)
+		tests := []struct {
+			input string
+			want  string
+		}{
+			{"/mnt/d/Videos/foo.mp4", "/mnt/d/"},
+			{"/mnt/c/Users/test/file.mkv", "/mnt/c/"},
+			{"/media/user/USB/foo.mp4", "/media/user/USB/"},
+			{"/home/user/file.mkv", "/home/user/"},
+			{"/opt/data/file.mkv", "/opt/data/"},
+			{"/", "/"},
+		}
+		for _, tc := range tests {
+			got := fileutil.GetDriveRoot(tc.input)
+			if got != tc.want {
+				t.Errorf("GetDriveRoot(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		}
 	}

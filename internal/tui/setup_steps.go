@@ -205,13 +205,12 @@ func (m setupModel) updateStepFolder(msg tea.Msg) (setupModel, tea.Cmd) {
 			m.step = stepDone
 			return m, nil
 		case " ":
-			if len(m.fpFiles) == 0 {
-				return m, nil
+			if m.fpCursor >= 0 && m.fpCursor < len(m.fpFiles) {
+				entry := m.fpFiles[m.fpCursor]
+				full := filepath.Join(m.fp.CurrentDirectory, entry.Name())
+				m.selectedPaths = togglePath(m.selectedPaths, full)
+				m.syncFpHeight()
 			}
-			entry := m.fpFiles[m.fpCursor]
-			full := filepath.Join(m.fp.CurrentDirectory, entry.Name())
-			m.selectedPaths = togglePath(m.selectedPaths, full)
-			m.syncFpHeight()
 			return m, nil
 		case "c":
 			if len(m.selectedPaths) > 0 {
@@ -229,30 +228,52 @@ func (m setupModel) updateStepFolder(msg tea.Msg) (setupModel, tea.Cmd) {
 		case "j", "down", "ctrl+n":
 			if m.fpCursor < len(m.fpFiles)-1 {
 				m.fpCursor++
+				if m.fpCursor > m.fpMin+m.fp.Height-1 {
+					m.fpMin++
+				}
 			}
 		case "k", "up", "ctrl+p":
 			if m.fpCursor > 0 {
 				m.fpCursor--
+				if m.fpCursor < m.fpMin {
+					m.fpMin--
+				}
 			}
 		case "g":
 			m.fpCursor = 0
+			m.fpMin = 0
 		case "G":
 			if len(m.fpFiles) > 0 {
 				m.fpCursor = len(m.fpFiles) - 1
+				m.fpMin = len(m.fpFiles) - m.fp.Height
+				if m.fpMin < 0 {
+					m.fpMin = 0
+				}
 			}
 		case "J", "pgdown":
 			m.fpCursor += m.fp.Height
 			if m.fpCursor >= len(m.fpFiles) {
 				m.fpCursor = len(m.fpFiles) - 1
 			}
+			m.fpMin += m.fp.Height
+			if m.fpMin+m.fp.Height > len(m.fpFiles) {
+				m.fpMin = len(m.fpFiles) - m.fp.Height
+			}
+			if m.fpMin < 0 {
+				m.fpMin = 0
+			}
 		case "K", "pgup":
 			m.fpCursor -= m.fp.Height
 			if m.fpCursor < 0 {
 				m.fpCursor = 0
 			}
+			m.fpMin -= m.fp.Height
+			if m.fpMin < 0 {
+				m.fpMin = 0
+			}
 		}
 	}
-	// Delegate to filepicker sub-component for all message types.
+	// Delegate to filepicker for navigation + directory loading.
 	var cmd tea.Cmd
 	prevDir := m.fp.CurrentDirectory
 	m.fp, cmd = m.fp.Update(msg)

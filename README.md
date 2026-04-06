@@ -7,9 +7,10 @@ A high-performance CLI batch video conversion tool for Windows that converts vid
 - **🎬 Batch Conversion** - Process entire directories of videos automatically
 - **⚡ HEVC/H.265 Encoding** - Significant file size reduction with maintained quality
 - **🖥️ GPU Auto-Detection** - Automatically finds and uses the best available hardware encoder
-- **🔄 Smart Caching** - Per-drive BLAKE3 hash-based cache prevents re-processing
+- **🔄 Smart Caching** - SQLite database with BLAKE3 hashing prevents re-processing
 - **🚀 Concurrent Processing** - Producer-consumer pipeline for efficient batch operations
 - **📊 Detailed Reporting** - Per-file conversion statistics with size comparisons
+- **🔍 Query Subcommands** - Built-in `stats`, `errors`, `recent`, `not-beneficial`, `formats`, `space-saved`
 - **🎯 Quality Presets** - Configurable quality settings (high_quality, balanced, space_saver)
 - **📁 Directory Preservation** - Maintains folder structure from dropped directory onwards
 - **🧹 Smart Output** - Only creates directories when conversions succeed
@@ -77,10 +78,18 @@ When multiple NVIDIA GPUs are detected, the tool distributes encoding across the
 
 ## 📋 Requirements
 
-- **Windows** (tested on Windows 10/11)
-- **FFmpeg** - Place in `ffmpeg\bin\` relative to exe, or configure path
-- **MediaInfo CLI** - Place in `MediaInfo_CLI_24.04_Windows_x64\` or configure path
+- **Windows 10/11** or **Linux / WSL2**
+- **FFmpeg** - Place in `ffmpeg\bin\` relative to exe, configure path in config, or install system-wide (`apt install ffmpeg`)
+- **MediaInfo CLI** - Place in `MediaInfo_CLI_24.04_Windows_x64\` or configure path (`apt install mediainfo`)
 - **GPU** (optional) - NVIDIA, AMD, or Intel GPU for hardware-accelerated encoding. Falls back to CPU automatically if no GPU is available.
+
+### WSL / Linux Notes
+
+The tool runs natively on Linux and WSL2. A few things to be aware of:
+
+- **GPU encoding on WSL2** requires NVIDIA GPU + the [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/) driver installed on the Windows host. AMD and Intel GPU encoding are not supported on WSL. When GPU encoding is unavailable, the tool automatically falls back to CPU (`libx265`).
+- **Config portability**: if your `configVideoConversion.json` was created on Windows with a GPU encoder (e.g. `hevc_nvenc`), the tool will detect it is unavailable on WSL/Linux and fall back to `libx265` automatically.
+- **Output paths**: on WSL, output is written relative to the detected mount point (e.g. `/mnt/d/HSORTED/...`). On native Linux, it uses the first meaningful path prefix (e.g. `/home/user/HSORTED/...`).
 
 ## 📦 Installation
 
@@ -125,6 +134,24 @@ video-converter.exe [flags] <directory>
 | `--jobs` | `0` | Parallel conversion jobs; `0` uses benchmark recommendation |
 | `--non-interactive` | `false` | Disable interactive prompts (auto-fallback to CPU on GPU failure) |
 | `--rebenchmark` | `false` | Force GPU benchmark even if cached results exist |
+| `--db-path` | `conversions.db` (next to exe) | Path to SQLite conversion database |
+
+### Subcommands
+
+Query the conversion database without running a conversion:
+
+```bash
+video-converter.exe stats                        # Overall conversion statistics
+video-converter.exe errors                       # List failed conversions
+video-converter.exe recent                       # Show 10 most recent conversions
+video-converter.exe recent --limit 25            # Show 25 most recent
+video-converter.exe not-beneficial               # Files where output was larger than input
+video-converter.exe formats                      # Breakdown by source codec/container
+video-converter.exe space-saved                  # Total space saved
+video-converter.exe space-saved --period week    # Space saved in the last week
+```
+
+All subcommands accept `--db-path` to specify a custom database location. The `stats`, `errors`, `not-beneficial`, and `formats` subcommands also accept `--drive` to filter by drive root (e.g. `--drive D:\`).
 
 ### Basic Usage
 ```bash
@@ -251,7 +278,7 @@ The migrated file is rewritten atomically (write to `.tmp` then rename) so a cra
 
 **Tip:** If files are getting larger, change to `"space_saver"` preset.
 
-See [QUALITY_SETTINGS.md](QUALITY_SETTINGS.md) for detailed quality configuration, including per-encoder quality parameters.
+See [QUALITY_SETTINGS.md](docs/QUALITY_SETTINGS.md) for detailed quality configuration, including per-encoder quality parameters.
 
 ## 📁 Output Structure
 
@@ -277,9 +304,9 @@ Output: D:\HSORTED\Movies\Action\2024\video.mp4
 
 ## 📚 Documentation
 
-- **[QUICK_START.md](QUICK_START.md)** - Getting started guide with tips
-- **[QUALITY_SETTINGS.md](QUALITY_SETTINGS.md)** - Complete quality configuration guide
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history and improvements
+- **[QUICK_START.md](docs/QUICK_START.md)** - Getting started guide with tips
+- **[QUALITY_SETTINGS.md](docs/QUALITY_SETTINGS.md)** - Complete quality configuration guide
+- **[CHANGELOG.md](docs/CHANGELOG.md)** - Version history and improvements
 - **[AGENTS.md](AGENTS.md)** - Developer guide and coding standards
 
 ## 💡 Examples
@@ -395,6 +422,15 @@ video-converter.exe --rebenchmark D:\Videos\
 
 **Solution:** Multi-GPU distribution only works with NVIDIA GPUs. AMD and Intel encoders don't support device selection through FFmpeg. Make sure you have multiple NVIDIA GPUs with up-to-date drivers.
 
+### WSL: GPU encoding fails or falls back to CPU
+**Problem:** On WSL2, the tool logs `Configured encoder "hevc_nvenc" is not available on this system` and falls back to `libx265`.
+
+**Solution:** GPU encoding on WSL2 requires the [NVIDIA CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/) driver installed on the **Windows host** (not inside WSL). Verify with:
+```bash
+nvidia-smi   # Should show your GPU inside WSL
+```
+If `nvidia-smi` doesn't work, install the latest NVIDIA Game Ready or Studio driver on Windows. The CUDA driver is forwarded into WSL2 automatically. AMD and Intel GPU encoding are not available on WSL.
+
 ## 📊 Conversion Statistics
 
 After processing, you'll see a comprehensive summary:
@@ -423,11 +459,39 @@ After processing, you'll see a comprehensive summary:
 - **Fallback Manager** - GPU error recovery with interactive or automatic CPU fallback
 - **Producer-Consumer Pipeline** - Concurrent file processing with configurable queue size
 - **BLAKE3 Hashing** - Fast file identification (partial or full hash)
-- **Per-Drive Caching** - JSON database at drive root (`D:\converted_files.json`)
+- **SQLite Database** - Centralized conversion cache (`conversions.db` next to executable) with WAL mode
 - **Atomic File Operations** - Safe writes with temp files and rename
-- **Thread-Safe Database** - RWMutex for concurrent access
+- **Enriched Metadata** - Source codec, container, resolution, duration, timestamps stored per conversion
+- **Query Subcommands** - Six built-in commands to inspect conversion history
 - **Smart Progress Reporting** - FFmpeg progress parsing via stdout
 - **Multi-GPU Distribution** - Speed-balanced work distribution across NVIDIA GPUs
+
+## 🛠️ Developer Workflow
+
+### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make` / `make all` | Lint + test + build (auto-detects OS) |
+| `make build` | Development build for current OS |
+| `make release` | Production build (stripped symbols, smaller binary) |
+| `make test` | Run all tests (auto-downloads sample video if missing) |
+| `make test-short` | Fast unit tests only (skip integration tests) |
+| `make test-cover` | Tests with per-package coverage summary |
+| `make cover-html` | Generate and open HTML coverage report |
+| `make test-race` | Tests with Go race detector |
+| `make lint` | Format (`go fmt`) + static analysis (`go vet`) |
+| `make tidy` | Tidy and verify Go module dependencies |
+| `make download-sample` | Download Big Buck Bunny sample video (interactive menu) |
+| `make clean` | Remove build artifacts and coverage files |
+
+### Sample Videos for Testing
+
+The test suite uses Big Buck Bunny sample clips. Run `make download-sample` for an interactive menu offering:
+- **10-second clips** at 360p, 720p, or 1080p (~5 MB each, recommended for tests)
+- **Full movie** at 480p, 720p, or 1080p
+
+`make test` automatically checks for sample files and prompts to download if missing (interactive terminals only).
 
 ## 🤝 Contributing
 
@@ -443,6 +507,7 @@ This is a personal project, but suggestions and bug reports are welcome! Please 
 - Uses [FFmpeg](https://ffmpeg.org/) for video encoding
 - Uses [MediaInfo](https://mediaarea.net/) for video analysis
 - BLAKE3 hashing via [zeebo/blake3](https://github.com/zeebo/blake3)
+- SQLite via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO)
 - Logging via [logrus](https://github.com/sirupsen/logrus)
 
 ---

@@ -125,6 +125,7 @@ type setupModel struct {
 	fpLastDir     string        // last CurrentDirectory shown in the hint bar
 	fpFiles       []os.DirEntry // mirror of fp's private files slice
 	fpCursor      int           // mirror of fp's private selected index
+	fpMin         int           // mirror of fp's private min (first visible index)
 
 	// drive-switcher overlay (shown inside stepFolder via Tab)
 	fpDriveOverlay bool
@@ -327,14 +328,11 @@ func (m *setupModel) syncFpHeight() {
 // splitHeights returns (fpHeight, selHeight) — the number of rows to give the
 // filepicker and the selection list respectively, so that everything fits
 // within m.height.
-//
-// Chrome lines in stepFolder (non-pane content):
-//
-//	title+blank=2, label=1, hint=1, curdir+blank=2, border top+bottom=2 → 8
-//	plus blank-before-sel=1 and sel-header=1 when selection is non-empty → +2
 func (m *setupModel) splitHeights() (fpHeight, selHeight int) {
-	const chromeNoSel = 8 // chrome when selection list is absent
-	available := m.height - chromeNoSel
+	// Measure actual chrome lines by rendering them. This avoids hard-coding
+	// a constant that silently drifts when the view layout changes.
+	chrome := m.chromeLineCount()
+	available := m.height - chrome
 	if available < 6 {
 		available = 6
 	}
@@ -344,10 +342,6 @@ func (m *setupModel) splitHeights() (fpHeight, selHeight int) {
 		return available, 0
 	}
 
-	// 2 extra chrome lines when the selection pane is present (blank + header).
-	available -= 2
-
-	// Cap selection pane at 40% of available, min 1 item row, max 8 rows.
 	maxSel := available * 40 / 100
 	if maxSel < 1 {
 		maxSel = 1
@@ -355,7 +349,7 @@ func (m *setupModel) splitHeights() (fpHeight, selHeight int) {
 	if maxSel > 8 {
 		maxSel = 8
 	}
-	selH := n // one row per item
+	selH := n
 	if selH > maxSel {
 		selH = maxSel
 	}
@@ -365,6 +359,52 @@ func (m *setupModel) splitHeights() (fpHeight, selHeight int) {
 		fpH = 3
 	}
 	return fpH, selH
+}
+
+// chromeLineCount returns the number of lines consumed by everything other than
+// the filepicker list and the selection items: title, label, hints, current
+// directory, border, and selection header (if any).
+func (m *setupModel) chromeLineCount() int {
+	w := m.width - 2
+	if w < 50 {
+		w = 50
+	}
+
+	// Border top + bottom.
+	lines := 2
+
+	// Title ("Video Converter — Setup") + blank line.
+	lines += 2
+
+	// "Select input folder"
+	lines++
+
+	// Hint bar — may wrap to multiple lines on narrow terminals.
+	tabHint := ""
+	if len(m.opts.AvailableDrives) > 0 {
+		tabHint = "  [Tab] switch drive"
+	}
+	hint := "[Space] toggle highlighted  [←/h] up  [→/l/Enter] open  [d] remove last  [q] cancel" + tabHint + "  [Ctrl+G] go to path"
+	hintWidth := lipgloss.Width(hint)
+	innerW := w - 4
+	if innerW < 1 {
+		innerW = 1
+	}
+	hintLines := (hintWidth + innerW - 1) / innerW
+	if hintLines < 1 {
+		hintLines = 1
+	}
+	lines += hintLines
+
+	// Current directory + blank line before filepicker.
+	lines += 2
+
+	// Selection pane header (blank + label) when selections exist.
+	if len(m.selectedPaths) > 0 {
+		lines += 2
+	}
+
+	return lines
 }
 
 // advance moves to the next needed step.
@@ -446,6 +486,7 @@ func (m *setupModel) fpLoadDir(dir string) {
 	}
 	m.fpFiles = entries
 	m.fpCursor = 0
+	m.fpMin = 0
 }
 
 // togglePath adds path to the slice if absent, or removes it if present.

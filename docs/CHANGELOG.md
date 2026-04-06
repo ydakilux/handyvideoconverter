@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **SQLite conversion database** replacing per-drive JSON caching — centralized `conversions.db` next to executable, WAL mode, pure Go via `modernc.org/sqlite` (no CGO)
+- `Store` interface with 9 methods + `SQLiteStore` implementation in `internal/database`
+- Enriched `Record` metadata: source codec, container, resolution (width/height), duration, conversion timestamp, conversion duration, source file path
+- Six CLI query subcommands: `stats`, `errors`, `recent`, `not-beneficial`, `formats`, `space-saved`
+- `--db-path` flag to specify custom SQLite database location
+- `cmd/download-sample` — cross-platform Big Buck Bunny sample video downloader with interactive menu (6 options: 3 x 10s clips, 3 x full movie at 360p/720p/1080p)
+- `make download-sample` Makefile target
+- `make test` auto-ensures sample files exist before running (via `--ensure` flag)
+- 33 database tests (9 CRUD + 22 query + 2 edge cases), all passing with `-race`
 - Comprehensive test suite: 13 packages, 100+ tests, `go test -race ./...` clean
 - `internal/tui` package tests (Bubble Tea model, key handling, render helpers)
 - `internal/pipeline/control` tests (pause/resume, stop variants, suspend-fn callbacks, concurrency)
@@ -16,6 +25,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `internal/gpu/benchmark` tests (`IsCacheValid`, `SaveCache`, `LoadCache` edge cases)
 - `compat_test.go` helpers: `getDriveRoot`, `sanitizeFolderName`, `formatBytes`, `fmtElapsed`, `buildConversionArgs`
 - `Makefile` targets: `test-short`, `test-cover`, `cover-html`
+
+### Changed
+- Conversion cache backend: per-drive JSON files replaced by centralized SQLite database
+- `Record` struct expanded from 5 fields to 13 fields (backward-compatible JSON tags)
+- `main.go` dispatches subcommands via `os.Args[1]` before `flag.Parse` (no CLI framework)
+
+### Fixed
+- `internal/ffmpeg/ffmpeg_test.go`: `lookupExe` now prefers native Linux `ffmpeg` over Windows `ffmpeg.exe` on WSL (Windows binary cannot access Linux `/tmp/` paths)
+- `internal/logging/logging_test.go`: Circuit breaker tests replaced `http://127.0.0.1:1` (hangs 5s per attempt on WSL) with closed `httptest.NewServer` for instant "connection refused"
+
+### Removed
+- Per-drive JSON `DatabaseManager` and `converted_files.json` caching
+- `benchmark temp.bat`, `benchmark v.bat` (Windows batch scripts)
+- Moved `CHANGELOG.md`, `QUICK_START.md`, `QUALITY_SETTINGS.md` from root to `docs/`
 
 ---
 

@@ -30,13 +30,14 @@ Thumbs.db
 
 # Log files
 *.log
+logs/
 
 # Temporary files
 *.tmp
 *~
 
-# Configuration files with sensitive data (if needed)
-# configVideoConversion.json
+# Runtime configuration
+configVideoConversion.json
 
 # Build artifacts
 bin/
@@ -50,7 +51,18 @@ MediaInfo*/
 # Database/cache files
 converted_files.json
 *_converted_files.json
+conversions.db
+benchmark_cache.json
+
+# Benchmark output
+benchmark_results*.csv
 
 # Test output
 coverage.out
 coverage.html
+
+# Downloaded sample videos
+testdata/
+
+# Agent working directory
+.sisyphus/

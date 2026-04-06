@@ -335,8 +335,12 @@ func TestNewSeqHookTrimsTrailingSlash(t *testing.T) {
 }
 
 func TestSeqHookCircuitBreakerDisablesAfterMaxFailures(t *testing.T) {
-	// Point the hook at a URL that will always fail.
-	hook := NewSeqHook("http://127.0.0.1:1", "") // port 1 is unreachable
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.Close()
+
+	hook := NewSeqHook(server.URL, "")
 
 	entry := &logrus.Entry{
 		Message: "fail",
@@ -392,8 +396,12 @@ func TestSeqHookCircuitBreakerSkipsWhenDisabled(t *testing.T) {
 }
 
 func TestSeqHookCircuitBreakerResetsOnSuccess(t *testing.T) {
-	// First: accumulate some failures using an unreachable address.
-	hook := NewSeqHook("http://127.0.0.1:1", "")
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	dead.Close()
+
+	hook := NewSeqHook(dead.URL, "")
 
 	failEntry := &logrus.Entry{
 		Message: "fail",
@@ -403,7 +411,6 @@ func TestSeqHookCircuitBreakerResetsOnSuccess(t *testing.T) {
 		Logger:  logrus.New(),
 	}
 
-	// Fire fewer than seqMaxFailures so the hook stays enabled.
 	for i := 0; i < seqMaxFailures-1; i++ {
 		_ = hook.Fire(failEntry)
 	}
@@ -411,8 +418,7 @@ func TestSeqHookCircuitBreakerResetsOnSuccess(t *testing.T) {
 		t.Fatalf("expected %d failures, got %d", seqMaxFailures-1, hook.failures)
 	}
 
-	// Now swap the serverURL to a working server and fire a success.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()

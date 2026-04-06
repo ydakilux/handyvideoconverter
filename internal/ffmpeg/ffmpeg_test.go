@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -81,19 +82,22 @@ func assertNotContains(t *testing.T, args []string, value string) {
 
 // ── Integration tests (require ffmpeg/ffprobe in PATH) ─────────────────────
 
-// lookupExe tries "ffmpeg.exe" first (avoids .cmd wrappers on Windows),
-// then falls back to the plain name.
+// lookupExe resolves a tool like "ffmpeg" or "ffprobe" for integration tests.
+// On Windows it tries the .exe suffix first to avoid legacy .cmd wrappers.
+// On Linux/WSL it tries the plain name first so it finds the native binary
+// instead of a Windows .exe reachable through WSL PATH interop.
 func lookupExe(t *testing.T, name string) string {
 	t.Helper()
-	// On Windows, prefer the .exe over a .cmd wrapper
-	if p, err := exec.LookPath(name + ".exe"); err == nil {
+	if runtime.GOOS == "windows" {
+		if p, err := exec.LookPath(name + ".exe"); err == nil {
+			return p
+		}
+	}
+	if p, err := exec.LookPath(name); err == nil {
 		return p
 	}
-	p, err := exec.LookPath(name)
-	if err != nil {
-		t.Skipf("%s not in PATH, skipping integration test", name)
-	}
-	return p
+	t.Skipf("%s not found in PATH — install it (e.g. apt install %s) or add it to PATH, skipping integration test", name, name)
+	return ""
 }
 
 // ffmpegPath returns the ffmpeg executable path, or skips the test.

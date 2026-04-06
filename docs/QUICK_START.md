@@ -8,6 +8,12 @@ video-converter.exe D:\Videos\
 
 # Multiple folders
 video-converter.exe D:\Movies\ E:\Shows\
+
+# On WSL / Linux
+./video-converter /mnt/d/Videos/
+```
+
+> **WSL/Linux**: GPU encoding requires NVIDIA GPU + [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/) driver on the Windows host. Without it, the tool falls back to CPU (`libx265`) automatically. AMD/Intel GPU encoding is not available on WSL.
 ```
 
 ## 🔧 Command-Line Flags
@@ -23,6 +29,7 @@ video-converter.exe D:\Movies\ E:\Shows\
 | `--config <path>` | `configVideoConversion.json` | Path to config file |
 | `--non-interactive` | off | Skip GPU fallback prompts (useful for scripted runs) |
 | `--rebenchmark` | off | Force GPU benchmark even if a cached result exists |
+| `--db-path <path>` | `conversions.db` (next to exe) | Path to SQLite conversion database |
 
 ### Encoder options for `--encoder`
 
@@ -90,6 +97,42 @@ Converted files are written to:
 ```
 
 Files that are **larger** after conversion are discarded automatically — the original is left untouched.
+
+## 🔍 Query Subcommands
+
+Inspect the conversion database without running a conversion:
+
+```bash
+# Overall statistics (total files, space saved, success/error counts)
+video-converter.exe stats
+
+# Filter stats by drive
+video-converter.exe stats --drive D:\
+
+# List failed conversions with error messages
+video-converter.exe errors
+
+# Show 10 most recent conversions (default)
+video-converter.exe recent
+
+# Show 25 most recent
+video-converter.exe recent --limit 25
+
+# Files where the converted output was larger than the original
+video-converter.exe not-beneficial
+
+# Breakdown by source codec and container format
+video-converter.exe formats
+
+# Total space saved (all time)
+video-converter.exe space-saved
+
+# Space saved in the last week or month
+video-converter.exe space-saved --period week
+video-converter.exe space-saved --period month
+```
+
+All subcommands accept `--db-path` to use a custom database location.
 
 ## 📈 Benchmark Tool
 

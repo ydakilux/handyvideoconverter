@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -120,6 +121,10 @@ func (a *App) runSetupPhase() (setupResult, error) {
 
 	a.fbManager = fallback.NewFallbackManager(!a.config.NonInteractive, os.Stdin, a.log)
 
+	if err := a.selectEncoder(ffmpegExe); err != nil {
+		return setupResult{}, err
+	}
+
 	startupCh := make(chan string, 16)
 
 	setupOpts := tui.SetupOptions{
@@ -165,11 +170,6 @@ func (a *App) runSetupPhase() (setupResult, error) {
 	go func() {
 		defer close(startupCh)
 
-		startupCh <- "Detecting encoder…"
-		if err := a.selectEncoder(ffmpegExe); err != nil {
-			startupErrCh <- err
-			return
-		}
 		startupCh <- fmt.Sprintf("Encoder: %s", a.config.VideoEncoder)
 
 		if err := a.runBenchmarks(ffmpegExe); err != nil {
@@ -370,22 +370,43 @@ func (a *App) selectEncoder(ffmpegExe string) error {
 	a.encoderRegistry.Register(encoder.NewAmfEncoder())
 	a.encoderRegistry.Register(encoder.NewQsvEncoder())
 
+	requestedEncoder := a.config.VideoEncoder
+	fellBackToCPU := false
+
 	if a.config.VideoEncoder == "auto" {
 		a.log.Info("Auto-detecting GPU encoders...")
 		detectionResult, err := detect.DetectEncoders(ffmpegExe, a.log)
 		if err != nil {
-			a.log.Warnf("GPU detection failed: %v — falling back to libx265", err)
+			a.log.Warnf("GPU detection failed: %v", err)
 			a.config.VideoEncoder = "libx265"
+			fellBackToCPU = true
 		} else {
+			for _, gpu := range detectionResult.Available {
+				if gpu.Available {
+					a.log.Infof("  %-14s  %-20s  available (%dms)", gpu.Encoder, gpu.Name, gpu.TrialEncodeMs)
+				} else {
+					a.log.Infof("  %-14s  %-20s  unavailable", gpu.Encoder, gpu.Name)
+				}
+			}
 			best := detect.SelectBest(detectionResult)
 			a.config.VideoEncoder = best.Encoder
-			a.log.Infof("Detected GPU: %s (encoder: %s)", best.Name, best.Encoder)
-			for _, gpu := range detectionResult.Available {
-				status := "unavailable"
-				if gpu.Available {
-					status = "available"
-				}
-				a.log.Debugf("  %s (%s): %s", gpu.Name, gpu.Encoder, status)
+			if best.Encoder == "libx265" {
+				fellBackToCPU = true
+			}
+			a.log.Infof("Best encoder: %s (%s)", best.Encoder, best.Name)
+		}
+	}
+
+	// Verify explicitly configured GPU encoders actually work on this system.
+	// The config may have been written on a different OS (e.g. Windows) where
+	// the encoder was available, but the current host (e.g. WSL/Linux) may
+	// lack the required hardware or FFmpeg codec support.
+	if a.config.VideoEncoder != "auto" && a.config.VideoEncoder != "libx265" {
+		if candidate, found := a.encoderRegistry.Get(a.config.VideoEncoder); found {
+			if !candidate.IsAvailable(ffmpegExe) {
+				a.log.Warnf("Configured encoder %q is not available on this system", a.config.VideoEncoder)
+				a.config.VideoEncoder = "libx265"
+				fellBackToCPU = true
 			}
 		}
 	}
@@ -395,10 +416,41 @@ func (a *App) selectEncoder(ffmpegExe string) error {
 		a.log.Warnf("Unknown encoder %q, falling back to libx265", a.config.VideoEncoder)
 		enc, _ = a.encoderRegistry.Get("libx265")
 		a.config.VideoEncoder = "libx265"
+		fellBackToCPU = true
 	}
 	a.selectedEncoder = enc
+
+	if fellBackToCPU && requestedEncoder != "libx265" {
+		if err := a.confirmCPUFallback(); err != nil {
+			return err
+		}
+	}
+
 	a.log.Infof("Selected encoder: %s", a.config.VideoEncoder)
 	return nil
+}
+
+func (a *App) confirmCPUFallback() error {
+	if a.config.NonInteractive {
+		a.log.Warn("No GPU encoder available — continuing with CPU (libx265) in non-interactive mode")
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "No GPU encoder is available on this system.")
+	fmt.Fprintln(os.Stderr, "CPU encoding (libx265) will be used instead. This is significantly slower.")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprint(os.Stderr, "Continue with CPU encoding? [Y/n] ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return nil
+	}
+	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if answer == "" || answer == "y" || answer == "yes" {
+		return nil
+	}
+	return fmt.Errorf("aborted — no GPU encoder available")
 }
 
 func (a *App) runBenchmarks(ffmpegExe string) error {

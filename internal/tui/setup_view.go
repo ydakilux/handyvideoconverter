@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m setupModel) viewStepStartup() string {
@@ -47,14 +49,10 @@ func (m setupModel) viewStepFolder(w int) string {
 		if len(m.opts.AvailableDrives) > 0 {
 			tabHint = "  [Tab] switch drive"
 		}
-		confirmHint := ""
-		if len(m.selectedPaths) > 0 {
-			confirmHint = "  [c] Confirm"
-		}
-		hint := setupStyleHint.Render("[Space] toggle highlighted  [←/h] up  [→/l/Enter] open  [d] remove last  [q] cancel" + tabHint + "  [Ctrl+G] go to path" + confirmHint)
+		hint := setupStyleHint.Render("[Space] toggle highlighted  [←/h] up  [→/l/Enter] open  [d] remove last  [q] cancel" + tabHint + "  [Ctrl+G] go to path")
 		b.WriteString(hint + "\n")
 		b.WriteString(setupStyleCurrent.Render("  "+m.fp.CurrentDirectory) + "\n\n")
-		b.WriteString(m.fp.View())
+		b.WriteString(m.renderFpWithScrollbar(inner))
 		if len(m.selectedPaths) > 0 {
 			_, selH := m.splitHeights()
 			itemRows := selH - 1
@@ -70,7 +68,7 @@ func (m setupModel) viewStepFolder(w int) string {
 			if len(m.selectedPaths) > itemRows {
 				label += fmt.Sprintf("  [showing last %d]", itemRows)
 			}
-			b.WriteString(setupStyleLabel.Render(label+"  [d] remove last") + "\n")
+			b.WriteString(setupStyleLabel.Render(label+"  [d] remove last  [c] Confirm") + "\n")
 			for _, p := range paths {
 				b.WriteString(setupStyleAnswer.Render("  ✓ "+truncate(p, inner-4)) + "\n")
 			}
@@ -175,6 +173,70 @@ func (m *setupModel) renderAnsweredAbove() string {
 	}
 	if b.Len() > 0 {
 		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+var (
+	scrollThumbStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED"))
+	scrollTrackStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#374151"))
+)
+
+func (m setupModel) renderFpWithScrollbar(maxWidth int) string {
+	raw := m.fp.View()
+	lines := strings.Split(raw, "\n")
+	// The filepicker pads with trailing newlines up to Height; trim the final
+	// empty element from the split but keep blank padding lines.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	total := len(m.fpFiles)
+	visible := m.fp.Height
+	needScroll := total > visible && visible > 0
+
+	if !needScroll {
+		return raw
+	}
+
+	scrollOffset := m.fpMin
+
+	thumbSize := visible * visible / total
+	if thumbSize < 1 {
+		thumbSize = 1
+	}
+
+	maxOff := total - visible
+	scrollRange := visible - thumbSize
+	thumbStart := 0
+	if maxOff > 0 {
+		thumbStart = scrollOffset * scrollRange / maxOff
+	}
+	thumbEnd := thumbStart + thumbSize
+
+	contentWidth := maxWidth - 2
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	var b strings.Builder
+	for i := 0; i < visible; i++ {
+		line := ""
+		if i < len(lines) {
+			line = lines[i]
+		}
+		visWidth := lipgloss.Width(line)
+		if visWidth < contentWidth {
+			line += strings.Repeat(" ", contentWidth-visWidth)
+		}
+
+		glyph := "░"
+		style := scrollTrackStyle
+		if i >= thumbStart && i < thumbEnd {
+			glyph = "█"
+			style = scrollThumbStyle
+		}
+		b.WriteString(line + style.Render(glyph) + "\n")
 	}
 	return b.String()
 }
