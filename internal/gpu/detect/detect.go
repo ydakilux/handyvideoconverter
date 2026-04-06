@@ -68,6 +68,7 @@ func DetectEncoders(ffmpegPath string, logger *logrus.Logger) (*DetectionResult,
 		Available:   true,
 	}
 
+	logger.Infof("Querying FFmpeg for registered encoders (%s)…", ffmpegPath)
 	candidates := listEncoders(ffmpegPath, logger)
 
 	var available []GPUInfo
@@ -80,9 +81,12 @@ func DetectEncoders(ffmpegPath string, logger *logrus.Logger) (*DetectionResult,
 		}
 
 		if candidates[known.encoder] {
+			logger.Infof("  %-14s  listed by FFmpeg — running trial encode…", known.encoder)
 			probed := trialEncode(ffmpegPath, known.encoder, logger)
 			info.Available = probed.Available
 			info.TrialEncodeMs = probed.TrialEncodeMs
+		} else {
+			logger.Infof("  %-14s  not listed by FFmpeg — skipped", known.encoder)
 		}
 
 		available = append(available, info)
@@ -105,7 +109,7 @@ func listEncoders(ffmpegPath string, logger *logrus.Logger) map[string]bool {
 	cmd := exec.CommandContext(ctx, ffmpegPath, "-encoders", "-hide_banner")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		logger.Debugf("Failed to list encoders: %v", err)
+		logger.Warnf("Failed to list encoders: %v", err)
 		return make(map[string]bool)
 	}
 
@@ -171,13 +175,14 @@ func trialEncode(ffmpegPath string, encoder string, logger *logrus.Logger) GPUIn
 		strings.Contains(lowerOut, "error while opening encoder")
 
 	if encodeError {
-		logger.Debugf("Trial encode failed for %s (%dms): %v — %s", encoder, elapsed, err, outputStr)
+		logger.Infof("  %-14s  trial encode FAILED (%dms): %v", encoder, elapsed, err)
+		logger.Debugf("  trial encode stderr: %s", outputStr)
 		return info
 	}
 
 	info.Available = true
 	info.TrialEncodeMs = elapsed
-	logger.Debugf("Trial encode succeeded for %s in %dms", encoder, elapsed)
+	logger.Infof("  %-14s  trial encode OK (%dms)", encoder, elapsed)
 
 	return info
 }

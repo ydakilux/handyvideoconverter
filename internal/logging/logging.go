@@ -195,7 +195,7 @@ func SetupLogging(serverURL, apiKey, logLevel, execDir string, seqEnabled bool, 
 func SetupEarlyLogging(logLevel string) (*logrus.Logger, func(serverURL, apiKey, execDir string, seqEnabled bool, consoleWriter io.Writer) (*logrus.Logger, func())) {
 	buf := &bufferWriter{}
 	early := logrus.New()
-	early.SetOutput(buf)
+	early.SetOutput(io.MultiWriter(os.Stderr, buf))
 	early.SetFormatter(&SimpleFormatter{})
 	level, err := logrus.ParseLevel(logLevel)
 	if err != nil {
