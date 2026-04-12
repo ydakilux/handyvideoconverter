@@ -75,12 +75,22 @@ type ProducerConfig struct {
 	FFprobePath string // resolved ffprobe path (may be empty → resolves from ffmpeg dir)
 	Log         *logrus.Logger
 	GPUAssigner *pipeline.GPUAssigner
+	// OnFileFinished is called whenever a file is fully handled (converted,
+	// skipped, or errored) so external callers (e.g. the TUI) can update
+	// progress. sizeBytes is the original file size (0 if unknown). May be nil.
+	OnFileFinished func(sizeBytes int64)
 }
 
 // Produce analyses files, filters already-processed ones, and submits Jobs to
 // the pipeline. It calls pipe.Wait() when done. Run in a goroutine.
 func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pipeline, bypass, forceHevc bool, cfg ProducerConfig) {
 	defer pipe.Wait()
+
+	notifyFinished := func(size int64) {
+		if cfg.OnFileFinished != nil {
+			cfg.OnFileFinished(size)
+		}
+	}
 
 	ffprobeExe := resolveFFprobeExe(cfg.Config, cfg.ExecDir)
 
@@ -118,6 +128,7 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 			if err != nil {
 				cfg.Log.Warnf("Failed to stat %s: %v", filePath, err)
 				cfg.Stats.IncrFilesErrored()
+				notifyFinished(0)
 				continue
 			}
 
@@ -128,6 +139,7 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 			if err != nil {
 				cfg.Log.Warnf("Failed to hash %s: %v", filePath, err)
 				cfg.Stats.IncrFilesErrored()
+				notifyFinished(info.Size())
 				continue
 			}
 
@@ -139,6 +151,7 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 				if rec != nil && (rec.Output != "" || rec.Note == "not_beneficial" || rec.Note == "already_hevc") {
 					cfg.Log.Debugf("Skipping %s (already processed)", filePath)
 					cfg.Stats.IncrFilesSkipped()
+					notifyFinished(info.Size())
 					continue
 				}
 			}
@@ -147,11 +160,13 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 			if err != nil {
 				cfg.Log.Warnf("Failed to get video info for %s: %v", filePath, err)
 				cfg.Stats.IncrFilesErrored()
+				notifyFinished(info.Size())
 				continue
 			}
 			if videoInfo == nil {
 				cfg.Log.Warnf("No video track found in %s", filePath)
 				cfg.Stats.IncrFilesErrored()
+				notifyFinished(info.Size())
 				continue
 			}
 
@@ -171,6 +186,7 @@ func Produce(files []string, fileToBaseDir map[string]string, pipe *pipeline.Pip
 					cfg.Log.Warnf("Failed to update already_hevc record for %s: %v", filePath, err)
 				}
 				cfg.Stats.IncrFilesSkipped()
+				notifyFinished(info.Size())
 				continue
 			}
 

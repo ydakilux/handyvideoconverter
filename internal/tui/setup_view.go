@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"video-converter/internal/fileutil"
 )
 
 func (m setupModel) viewStepStartup() string {
@@ -42,7 +44,7 @@ func (m setupModel) viewStepFolder(w int) string {
 				cursor = setupStyleCursor.Render("❯ ")
 				style = setupStyleDriveSelected
 			}
-			b.WriteString(style.Render(truncate(cursor+d, inner)) + "\n")
+			b.WriteString(style.Render(truncate(cursor+d.Label, inner)) + "\n")
 		}
 	} else {
 		tabHint := ""
@@ -122,20 +124,41 @@ func (m setupModel) viewStepOutputDrive(w int) string {
 	inner := w - 4
 	var b strings.Builder
 	b.WriteString(m.renderAnsweredAbove())
+
+	// Total file size for display — prefer scan result; fall back to pre-computed value.
+	totalBytes := m.scan.totalSizeBytes
+	if totalBytes == 0 {
+		totalBytes = m.opts.TotalFileSizeBytes
+	}
+
 	if !m.driveYesAsked {
 		b.WriteString(setupStyleLabel.Render("Write output to a different drive?") + "\n")
+		if totalBytes > 0 {
+			b.WriteString(setupStyleHint.Render(fmt.Sprintf("  Total video size to convert: %s", fileutil.FormatBytes(totalBytes))) + "\n")
+		}
 		b.WriteString(setupStyleHint.Render("  [y] Yes   [n / Enter] No — use source drive   [Esc] cancel") + "\n")
 	} else {
 		b.WriteString(setupStyleLabel.Render("Select output drive") + "\n")
+		if totalBytes > 0 {
+			b.WriteString(setupStyleHint.Render(fmt.Sprintf("  Space needed: %s", fileutil.FormatBytes(totalBytes))) + "\n")
+		}
 		b.WriteString(setupStyleHint.Render("  [↑/k] [↓/j] navigate   [Enter] confirm   [Esc] use source drive") + "\n\n")
 		for i, d := range m.opts.AvailableDrives {
 			cursor := "  "
-			style := setupStyleDriveNormal
+			var style lipgloss.Style
 			if i == m.driveCursor {
 				cursor = setupStyleCursor.Render("❯ ")
 				style = setupStyleDriveSelected
+			} else if totalBytes > 0 && d.FreeBytes > 0 {
+				if d.FreeBytes >= totalBytes {
+					style = setupStyleDriveEnough
+				} else {
+					style = setupStyleDriveInsufficient
+				}
+			} else {
+				style = setupStyleDriveNormal
 			}
-			line := truncate(cursor+d, inner)
+			line := truncate(cursor+d.Label, inner)
 			b.WriteString(style.Render(line) + "\n")
 		}
 	}

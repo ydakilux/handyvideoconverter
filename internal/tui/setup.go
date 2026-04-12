@@ -46,6 +46,13 @@ func waitStartupLine(ch <-chan string) tea.Cmd {
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
+// DriveInfo describes one available output drive.
+type DriveInfo struct {
+	Root      string // e.g. "D:\" on Windows, "/mnt/d/" on Unix
+	Label     string // display string, e.g. "D:\ (205.5 GB free / 931.5 GB total)"
+	FreeBytes int64  // available bytes (0 = unknown)
+}
+
 // SetupOptions describes which questions the setup phase must ask.
 // Fields set to their zero value mean "already known — skip this question".
 type SetupOptions struct {
@@ -70,7 +77,11 @@ type SetupOptions struct {
 	NeedParallelJobs bool
 	DefaultParallel  int
 	NeedOutputDrive  bool
-	AvailableDrives  []string // populated only when NeedOutputDrive == true
+	AvailableDrives  []DriveInfo // populated only when NeedOutputDrive == true
+	// TotalFileSizeBytes is the total size of discovered video files.
+	// When non-zero it is shown in the output-drive selection step so the
+	// user knows how much space is needed on the target drive.
+	TotalFileSizeBytes int64
 }
 
 // SetupAnswers carries the values collected during setup.
@@ -103,9 +114,10 @@ const (
 
 // confirmScan holds the pre-scanned overview shown in stepConfirm.
 type confirmScan struct {
-	totalDirs  int
-	totalFiles int
-	baseDirs   []string // unique root paths the user added
+	totalDirs      int
+	totalFiles     int
+	totalSizeBytes int64    // sum of sizes of matching video files
+	baseDirs       []string // unique root paths the user added
 }
 
 type setupModel struct {
@@ -429,8 +441,7 @@ func (m *setupModel) jumpToDrive() tea.Cmd {
 	if len(m.opts.AvailableDrives) == 0 {
 		return nil
 	}
-	raw := m.opts.AvailableDrives[m.fpDriveCursor]
-	root := strings.SplitN(raw, " ", 2)[0] // e.g. "D:\"
+	root := m.opts.AvailableDrives[m.fpDriveCursor].Root
 	m.fp.CurrentDirectory = root
 	// Reset scroll/selection stacks so the new directory starts at the top.
 	m.fp = resetFilepickerView(m.fp)
@@ -529,6 +540,7 @@ func scanPaths(paths []string, extensions []string) confirmScan {
 			ext := strings.ToLower(filepath.Ext(root))
 			if matchAll || extSet[ext] {
 				sc.totalFiles++
+				sc.totalSizeBytes += info.Size()
 			}
 			continue
 		}
@@ -549,6 +561,7 @@ func scanPaths(paths []string, extensions []string) confirmScan {
 			ext := strings.ToLower(filepath.Ext(p))
 			if matchAll || extSet[ext] {
 				sc.totalFiles++
+				sc.totalSizeBytes += fi.Size()
 			}
 			return nil
 		})
@@ -570,14 +583,14 @@ var (
 	setupStyleBorder  = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#4B5563"))
-	setupStyleCursor        = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
-	setupStyleDriveNormal   = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
-	setupStyleDriveSelected = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#7C3AED")).
-				Bold(true)
-	setupStyleStartupLine = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
-	setupStyleStartupDim  = lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
-	setupStyleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+	setupStyleCursor            = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
+	setupStyleDriveNormal       = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+	setupStyleDriveSelected     = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED")).Bold(true)
+	setupStyleDriveEnough       = lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")) // green — enough free space
+	setupStyleDriveInsufficient = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")) // red — not enough space
+	setupStyleStartupLine       = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+	setupStyleStartupDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+	setupStyleSpinner           = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
 )
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}

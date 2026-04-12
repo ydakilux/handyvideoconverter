@@ -127,16 +127,30 @@ func (a *App) runSetupPhase() (setupResult, error) {
 
 	startupCh := make(chan string, 16)
 
+	// When paths are already known (CLI args), do a fast pre-discovery (directory
+	// walk only — no FFprobe) so we can show the total file size on the output-drive
+	// selection screen before the user picks a drive.
+	var preDiscoveredTotalBytes int64
+	if len(a.opts.Paths) > 0 {
+		preFiles, _ := discovery.DiscoverFiles(a.opts.Paths, a.config.FileExtensions, a.log)
+		for _, f := range preFiles {
+			if info, err := os.Stat(f); err == nil {
+				preDiscoveredTotalBytes += info.Size()
+			}
+		}
+	}
+
 	setupOpts := tui.SetupOptions{
-		StartupCh:        startupCh,
-		NeedFolder:       len(a.opts.Paths) == 0,
-		VideoExtensions:  a.config.FileExtensions,
-		NeedBypass:       !a.opts.Bypass,
-		NeedForceHevc:    !a.opts.ForceHevc,
-		NeedParallelJobs: a.opts.ParallelJobs == 0,
-		DefaultParallel:  a.config.MaxParallelJobs,
-		NeedOutputDrive:  !a.opts.SameDrive,
-		AvailableDrives:  getAvailableDrives(),
+		StartupCh:          startupCh,
+		NeedFolder:         len(a.opts.Paths) == 0,
+		VideoExtensions:    a.config.FileExtensions,
+		NeedBypass:         !a.opts.Bypass,
+		NeedForceHevc:      !a.opts.ForceHevc,
+		NeedParallelJobs:   a.opts.ParallelJobs == 0,
+		DefaultParallel:    a.config.MaxParallelJobs,
+		NeedOutputDrive:    !a.opts.SameDrive,
+		AvailableDrives:    getAvailableDrives(),
+		TotalFileSizeBytes: preDiscoveredTotalBytes,
 	}
 
 	var answersCh <-chan tui.SetupAnswers
@@ -245,6 +259,15 @@ func (a *App) runConversionPhase(sr setupResult) error {
 	}
 	a.log.Infof("Found %d files to process", len(files))
 
+	// Sum file sizes for the global ETA.
+	var totalDiscoveredBytes int64
+	for _, f := range files {
+		if info, err := os.Stat(f); err == nil {
+			totalDiscoveredBytes += info.Size()
+		}
+	}
+	a.ui.SetConversionStats(len(files), totalDiscoveredBytes)
+
 	numWorkers := a.config.MaxParallelJobs
 	if numWorkers < 1 {
 		numWorkers = 1
@@ -303,10 +326,14 @@ func (a *App) runConversionPhase(sr setupResult) error {
 			Stats:       &a.stats,
 			Log:         a.log,
 			GPUAssigner: gpuAssigner,
+			OnFileFinished: func(sizeBytes int64) {
+				a.ui.FileFinished(sizeBytes)
+			},
 		})
 	}()
 
-	for range a.pipeline.Results() {
+	for result := range a.pipeline.Results() {
+		a.ui.FileFinished(result.Job.OriginalSize)
 	}
 
 	return nil
@@ -325,7 +352,7 @@ func (a *App) runSummaryPhase() {
 	boxSummary := a.buildStatsSummaryBox(elapsed)
 	a.ui.PrintSummary(boxSummary)
 
-	openHSortedFolders(a.stats.TouchedDrives)
+	openHSortedFolders(a.stats.TouchedDrives, a.outputDrive)
 
 	fmt.Println("All tasks completed")
 	fmt.Println()
@@ -691,7 +718,16 @@ func (a *App) promptInstallFFmpeg() error {
 	return fmt.Errorf("ffmpeg not found — please install ffmpeg and add it to PATH, or set ffmpeg_path in the config file")
 }
 
-func openHSortedFolders(touchedDrives map[string]bool) {
+func openHSortedFolders(touchedDrives map[string]bool, outputDriveOverride string) {
+	// When an output drive was chosen, all files land on that single drive.
+	// Open only that drive's HSORTED folder; ignore the source drives.
+	if outputDriveOverride != "" {
+		hsortedPath := filepath.Join(outputDriveOverride, converter.OutputDirName)
+		if _, err := os.Stat(hsortedPath); err == nil {
+			openFolder(hsortedPath) //nolint:errcheck
+		}
+		return
+	}
 	for drive := range touchedDrives {
 		hsortedPath := filepath.Join(drive, converter.OutputDirName)
 		if _, err := os.Stat(hsortedPath); err == nil {

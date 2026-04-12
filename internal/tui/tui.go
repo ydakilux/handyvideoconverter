@@ -131,6 +131,19 @@ type msgStartTimer struct{}
 
 type msgTick time.Time
 
+// msgSetConversionStats is sent once before the conversion loop starts to give
+// the TUI enough context to compute a global ETA.
+type msgSetConversionStats struct {
+	totalFiles int
+	totalBytes int64 // sum of sizes of all files that will be processed
+}
+
+// msgFileFinished is sent each time a file finishes (converted, skipped, or errored)
+// so the global ETA can be updated from real throughput.
+type msgFileFinished struct {
+	sizeBytes int64 // original file size (0 if unknown)
+}
+
 // msgControlState updates the displayed control state (paused / stopping).
 type msgControlState struct {
 	paused   bool
@@ -232,6 +245,13 @@ type model struct {
 	onScreenReady func()
 	// onReady is called once after the converting phase viewport is initialised.
 	onReady func()
+
+	// global ETA tracking
+	etaTotalFiles    int       // total files to process (0 = unknown)
+	etaTotalBytes    int64     // total bytes across all files (0 = unknown)
+	etaDoneFiles     int       // files completed (converted + skipped + errored)
+	etaDoneBytes     int64     // bytes of completed files
+	etaFirstDoneTime time.Time // wall time of first file completion
 }
 
 type controlAction int
@@ -509,6 +529,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.userScrolled = false
 		}
 		return m, nil
+
+	case msgSetConversionStats:
+		m.etaTotalFiles = msg.totalFiles
+		m.etaTotalBytes = msg.totalBytes
+		return m, nil
+
+	case msgFileFinished:
+		m.etaDoneFiles++
+		m.etaDoneBytes += msg.sizeBytes
+		if m.etaFirstDoneTime.IsZero() {
+			m.etaFirstDoneTime = time.Now()
+		}
+		return m, nil
 	}
 
 	// Forward mouse and other events to viewport
@@ -521,7 +554,155 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// ── View ──────────────────────────────────────────────────────────────────────
+// globalETA returns the estimated total duration for all files ("~X:XX") or
+// "" when there is not enough data yet.
+//
+// Strategy:
+//  1. If active jobs have meaningful progress (pct > 0), estimate each job's
+//     remaining seconds from its own elapsed/pct ratio, then project queued
+//     files using the average per-job speed and current parallelism.
+//  2. Once files start completing, blend in throughput from completed files
+//     (bytes or count based) for the queued portion — this becomes the dominant
+//     signal as more files finish.
+func (m model) globalETA() string {
+	if !m.timerActive {
+		return ""
+	}
+
+	now := time.Now()
+	totalElapsed := now.Sub(m.timerStart)
+
+	// ── gather per-job remaining seconds from active jobs ──────────────────
+	// Only use jobs that have made measurable progress.
+	var totalJobRemainingSeconds float64
+	var validJobs int
+	var avgSecsPerPct float64 // averaged over all active valid jobs
+
+	for _, js := range m.jobs {
+		if js.pct <= 0 {
+			continue
+		}
+		jobElapsed := now.Sub(js.startedAt).Seconds()
+		if jobElapsed <= 0 {
+			continue
+		}
+		secsPerPct := jobElapsed / float64(js.pct)
+		remaining := secsPerPct * float64(100-js.pct)
+		totalJobRemainingSeconds += remaining
+		avgSecsPerPct += secsPerPct
+		validJobs++
+	}
+
+	// Not enough data at all.
+	if validJobs == 0 && m.etaDoneFiles == 0 {
+		return ""
+	}
+
+	parallelism := len(m.jobs)
+	if parallelism < 1 {
+		parallelism = 1
+	}
+
+	if validJobs > 0 {
+		avgSecsPerPct /= float64(validJobs)
+	}
+
+	// ── compute queued files count ─────────────────────────────────────────
+	// etaTotalFiles comes from SetConversionStats. Fallback: use totalFiles
+	// field on any active job (it's the grand total, not per-folder).
+	totalFiles := m.etaTotalFiles
+	if totalFiles == 0 {
+		for _, js := range m.jobs {
+			if js.totalFiles > 0 {
+				totalFiles = js.totalFiles
+				break
+			}
+		}
+	}
+
+	doneFiles := m.etaDoneFiles // fully completed
+	activeFiles := len(m.jobs)  // currently converting
+	queuedFiles := 0
+	if totalFiles > 0 {
+		queuedFiles = totalFiles - doneFiles - activeFiles
+		if queuedFiles < 0 {
+			queuedFiles = 0
+		}
+	}
+
+	// ── remaining time estimate ────────────────────────────────────────────
+	var remainingSecs float64
+
+	if validJobs > 0 {
+		// Active jobs: use their individual ETA (max of active jobs, since they
+		// run in parallel — the slowest one dictates when the batch finishes).
+		maxJobRemaining := 0.0
+		for _, js := range m.jobs {
+			if js.pct <= 0 {
+				continue
+			}
+			jobElapsed := now.Sub(js.startedAt).Seconds()
+			if jobElapsed <= 0 {
+				continue
+			}
+			r := (jobElapsed / float64(js.pct)) * float64(100-js.pct)
+			if r > maxJobRemaining {
+				maxJobRemaining = r
+			}
+		}
+		remainingSecs = maxJobRemaining
+
+		// Queued files: use avg speed from active jobs.
+		if queuedFiles > 0 && avgSecsPerPct > 0 {
+			secsPerFile := avgSecsPerPct * 100.0
+			queuedSecs := secsPerFile * float64(queuedFiles) / float64(parallelism)
+			remainingSecs += queuedSecs
+		}
+	}
+
+	// ── blend with completion-based throughput once files start finishing ──
+	if m.etaDoneFiles > 0 && !m.etaFirstDoneTime.IsZero() {
+		sinceFirstDone := now.Sub(m.etaFirstDoneTime).Seconds()
+		if sinceFirstDone > 0 {
+			var completionBasedRemaining float64
+			if m.etaTotalBytes > 0 && m.etaDoneBytes > 0 {
+				bytesPerSec := float64(m.etaDoneBytes) / sinceFirstDone
+				remainingBytes := float64(m.etaTotalBytes - m.etaDoneBytes)
+				// Subtract bytes currently being processed (rough approximation).
+				for _, js := range m.jobs {
+					if js.pct > 0 && m.etaTotalBytes > 0 && totalFiles > 0 {
+						approxJobBytes := float64(m.etaTotalBytes) / float64(totalFiles)
+						remainingBytes -= approxJobBytes * float64(js.pct) / 100.0
+					}
+				}
+				if remainingBytes < 0 {
+					remainingBytes = 0
+				}
+				if bytesPerSec > 0 {
+					completionBasedRemaining = remainingBytes / bytesPerSec
+				}
+			} else if totalFiles > 0 {
+				secPerFile := sinceFirstDone / float64(m.etaDoneFiles)
+				completionBasedRemaining = secPerFile * float64(queuedFiles+activeFiles) / float64(parallelism)
+			}
+
+			// Weight: completion-based grows in influence as more files finish.
+			weight := float64(m.etaDoneFiles) / float64(m.etaDoneFiles+activeFiles+1)
+			remainingSecs = remainingSecs*(1-weight) + completionBasedRemaining*weight
+		}
+	}
+
+	if remainingSecs < 0 {
+		remainingSecs = 0
+	}
+
+	totalEstimate := totalElapsed + time.Duration(remainingSecs*float64(time.Second))
+	if totalEstimate <= 0 {
+		return ""
+	}
+
+	return "~" + fmtDuration(totalEstimate.Round(time.Second))
+}
 
 func (m model) View() string {
 	if m.phase == phaseSetup {
@@ -545,7 +726,12 @@ func (m model) renderInner() string {
 	var timerStr string
 	if m.timerActive {
 		elapsed := time.Since(m.timerStart).Round(time.Second)
-		timerStr = styleTimer.Render("⏱ " + fmtDuration(elapsed))
+		timerPart := styleTimer.Render("⏱ " + fmtDuration(elapsed))
+		if eta := m.globalETA(); eta != "" {
+			timerStr = timerPart + styleTimer.Render(" / "+eta)
+		} else {
+			timerStr = timerPart
+		}
 	}
 	titleLine := padBetween(title, timerStr, w)
 	b.WriteString(titleLine + "\n")
@@ -934,6 +1120,25 @@ func (u *UI) StartTimer() {
 		return
 	}
 	u.prog.Send(msgStartTimer{})
+}
+
+// SetConversionStats informs the TUI of the total file count and total byte
+// size for all files that will be processed, enabling a global ETA estimate.
+func (u *UI) SetConversionStats(totalFiles int, totalBytes int64) {
+	if u.plain {
+		return
+	}
+	u.prog.Send(msgSetConversionStats{totalFiles: totalFiles, totalBytes: totalBytes})
+}
+
+// FileFinished notifies the TUI that one file has finished processing
+// (converted, skipped, or errored), updating the global ETA.
+// sizeBytes should be the original file size (0 if unknown).
+func (u *UI) FileFinished(sizeBytes int64) {
+	if u.plain {
+		return
+	}
+	u.prog.Send(msgFileFinished{sizeBytes: sizeBytes})
 }
 
 // Elapsed returns the wall-clock duration since StartTimer was called.

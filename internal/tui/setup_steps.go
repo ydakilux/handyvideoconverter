@@ -105,8 +105,7 @@ func (m setupModel) updateStepOutputDrive(msg tea.KeyMsg) (setupModel, tea.Cmd) 
 		}
 	case "enter":
 		if len(m.opts.AvailableDrives) > 0 {
-			selected := m.opts.AvailableDrives[m.driveCursor]
-			m.answers.OutputDrive = strings.SplitN(selected, " ", 2)[0]
+			m.answers.OutputDrive = m.opts.AvailableDrives[m.driveCursor].Root
 		}
 		return m.advanceAndReturn()
 	case "esc":
@@ -183,7 +182,7 @@ func (m setupModel) updateStepFolder(msg tea.Msg) (setupModel, tea.Cmd) {
 				m.fpDriveCursor = 0
 				cur := strings.ToUpper(m.fp.CurrentDirectory)
 				for i, d := range m.opts.AvailableDrives {
-					if strings.HasPrefix(cur, strings.ToUpper(strings.SplitN(d, " ", 2)[0])) {
+					if strings.HasPrefix(cur, strings.ToUpper(d.Root)) {
 						m.fpDriveCursor = i
 						break
 					}
