@@ -265,3 +265,65 @@ func (s *SQLiteStore) GetSpaceSaved(ctx context.Context, period string) (*SpaceS
 	}
 	return &result, nil
 }
+
+func (s *SQLiteStore) GetConversionTimeline(ctx context.Context) ([]TimelinePoint, error) {
+	query := `
+		SELECT DATE(converted_at) AS day,
+		       drive_root,
+		       COUNT(*),
+		       COALESCE(SUM(original_size), 0),
+		       COALESCE(SUM(converted_size), 0),
+		       COALESCE(SUM(original_size - converted_size), 0)
+		FROM conversions
+		WHERE converted_at IS NOT NULL
+		  AND (error IS NULL OR error = '')
+		  AND (note IS NULL OR note = '')
+		GROUP BY day, drive_root
+		ORDER BY day ASC`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("get conversion timeline: %w", err)
+	}
+	defer rows.Close()
+
+	var results []TimelinePoint
+	for rows.Next() {
+		var (
+			tp        TimelinePoint
+			day       sql.NullString
+			driveRoot sql.NullString
+		)
+		if err := rows.Scan(&day, &driveRoot, &tp.Count, &tp.TotalOriginal, &tp.TotalConverted, &tp.BytesSaved); err != nil {
+			return nil, fmt.Errorf("scan timeline point: %w", err)
+		}
+		tp.Date = day.String
+		tp.DriveRoot = driveRoot.String
+		results = append(results, tp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate timeline points: %w", err)
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) GetDriveRoots(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT drive_root FROM conversions ORDER BY drive_root`)
+	if err != nil {
+		return nil, fmt.Errorf("get drive roots: %w", err)
+	}
+	defer rows.Close()
+
+	var results []string
+	for rows.Next() {
+		var dr string
+		if err := rows.Scan(&dr); err != nil {
+			return nil, fmt.Errorf("scan drive root: %w", err)
+		}
+		results = append(results, dr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate drive roots: %w", err)
+	}
+	return results, nil
+}

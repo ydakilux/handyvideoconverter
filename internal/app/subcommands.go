@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"video-converter/internal/dashboard"
 	"video-converter/internal/database"
 )
 
@@ -246,4 +247,29 @@ func RunSpaceSaved(args []string) {
 	fmt.Println("─────────────────────────────────")
 	fmt.Printf("Files:      %d\n", result.FileCount)
 	fmt.Printf("Saved:      %s\n", formatBytes(result.BytesSaved))
+}
+
+func RunDashboard(args []string) {
+	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
+	dbPath := fs.String("db-path", defaultDBPath(), "Path to SQLite database")
+	output := fs.String("output", "", "Output HTML file path (default: dashboard.html next to executable)")
+	noBrowser := fs.Bool("no-browser", false, "Don't open the dashboard in a browser")
+	fs.Parse(args)
+
+	store, cleanup := openStore(*dbPath)
+	defer cleanup()
+
+	outPath, err := dashboard.Generate(context.Background(), store, *output)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating dashboard: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Dashboard generated: %s\n", outPath)
+
+	if !*noBrowser {
+		if err := openURL(outPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not open browser: %v\n", err)
+		}
+	}
 }

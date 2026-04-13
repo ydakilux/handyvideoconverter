@@ -54,6 +54,9 @@ converted_files.json
 conversions.db
 benchmark_cache.json
 
+# Generated dashboard
+dashboard.html
+
 # Benchmark output
 benchmark_results*.csv
 

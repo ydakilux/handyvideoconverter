@@ -564,6 +564,98 @@ func TestGetSpaceSaved_InvalidPeriod(t *testing.T) {
 	}
 }
 
+func TestGetConversionTimeline_AllDrives(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	seedTestDB(t, store)
+	ctx := context.Background()
+
+	points, err := store.GetConversionTimeline(ctx)
+	if err != nil {
+		t.Fatalf("GetConversionTimeline: %v", err)
+	}
+
+	// Seed has 5 successful records across 3 dates and 2 drives.
+	// today D:\: hash_s1 (10000/6000) + hash_s2 (20000/12000)
+	// threeDaysAgo D:\: hash_s4 (15000/9000)
+	// threeDaysAgo E:\: hash_s3 (30000/18000)
+	// twoMonthsAgo E:\: hash_s5 (50000/30000)
+	// Error/not_beneficial/already_hevc records are excluded.
+	if len(points) == 0 {
+		t.Fatal("expected timeline points, got 0")
+	}
+
+	totalCount := 0
+	for _, p := range points {
+		totalCount += p.Count
+		if p.Date == "" {
+			t.Error("timeline point has empty date")
+		}
+		if p.DriveRoot == "" {
+			t.Error("timeline point has empty drive root")
+		}
+	}
+	if totalCount != 5 {
+		t.Errorf("total count across all points = %d, want 5", totalCount)
+	}
+
+	// Points must be in ascending date order.
+	for i := 0; i < len(points)-1; i++ {
+		if points[i].Date > points[i+1].Date {
+			t.Errorf("points not in ascending order: [%d]=%s > [%d]=%s",
+				i, points[i].Date, i+1, points[i+1].Date)
+		}
+	}
+}
+
+func TestGetConversionTimeline_EmptyDB(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	ctx := context.Background()
+
+	points, err := store.GetConversionTimeline(ctx)
+	if err != nil {
+		t.Fatalf("GetConversionTimeline on empty DB: %v", err)
+	}
+	if len(points) != 0 {
+		t.Errorf("len = %d, want 0", len(points))
+	}
+}
+
+func TestGetDriveRoots(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	seedTestDB(t, store)
+	ctx := context.Background()
+
+	roots, err := store.GetDriveRoots(ctx)
+	if err != nil {
+		t.Fatalf("GetDriveRoots: %v", err)
+	}
+
+	if len(roots) != 2 {
+		t.Fatalf("len = %d, want 2", len(roots))
+	}
+
+	// Should be sorted: D:\ before E:\
+	if roots[0] != `D:\` {
+		t.Errorf("roots[0] = %q, want D:\\", roots[0])
+	}
+	if roots[1] != `E:\` {
+		t.Errorf("roots[1] = %q, want E:\\", roots[1])
+	}
+}
+
+func TestGetDriveRoots_EmptyDB(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	ctx := context.Background()
+
+	roots, err := store.GetDriveRoots(ctx)
+	if err != nil {
+		t.Fatalf("GetDriveRoots on empty DB: %v", err)
+	}
+	if len(roots) != 0 {
+		t.Errorf("len = %d, want 0", len(roots))
+	}
+}
+
 func TestGetErrors_DriveAndPathFilter(t *testing.T) {
 	store := newTestSQLiteStore(t)
 	seedTestDB(t, store)

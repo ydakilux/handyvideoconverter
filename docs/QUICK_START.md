@@ -130,6 +130,12 @@ video-converter.exe space-saved
 # Space saved in the last week or month
 video-converter.exe space-saved --period week
 video-converter.exe space-saved --period month
+
+# Generate an interactive HTML dashboard and open in browser
+video-converter.exe dashboard
+
+# Generate without opening, custom output path
+video-converter.exe dashboard --no-browser --output report.html
 ```
 
 All subcommands accept `--db-path` to use a custom database location.

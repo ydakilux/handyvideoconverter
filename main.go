@@ -30,6 +30,9 @@ func main() {
 		case "space-saved":
 			app.RunSpaceSaved(os.Args[2:])
 			return
+		case "dashboard":
+			app.RunDashboard(os.Args[2:])
+			return
 		}
 	}
 

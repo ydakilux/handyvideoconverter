@@ -66,6 +66,16 @@ type SpaceSavedResult struct {
 	BytesSaved int64
 }
 
+// TimelinePoint represents a single day's conversion statistics.
+type TimelinePoint struct {
+	Date           string
+	Count          int
+	TotalOriginal  int64
+	TotalConverted int64
+	BytesSaved     int64
+	DriveRoot      string
+}
+
 // Store defines the interface for conversion record storage.
 type Store interface {
 	// GetRecord retrieves a conversion record by drive root and file hash.
@@ -97,4 +107,8 @@ type Store interface {
 	// GetSpaceSaved returns total space saved for a given time period.
 	// period: "week" (7 days), "month" (30 days), "total" (all time)
 	GetSpaceSaved(ctx context.Context, period string) (*SpaceSavedResult, error)
+
+	GetConversionTimeline(ctx context.Context) ([]TimelinePoint, error)
+
+	GetDriveRoots(ctx context.Context) ([]string, error)
 }

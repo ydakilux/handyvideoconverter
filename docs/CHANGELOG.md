@@ -10,9 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **SQLite conversion database** replacing per-drive JSON caching — centralized `conversions.db` next to executable, WAL mode, pure Go via `modernc.org/sqlite` (no CGO)
-- `Store` interface with 9 methods + `SQLiteStore` implementation in `internal/database`
+- `Store` interface with 11 methods + `SQLiteStore` implementation in `internal/database`
 - Enriched `Record` metadata: source codec, container, resolution (width/height), duration, conversion timestamp, conversion duration, source file path
 - Six CLI query subcommands: `stats`, `errors`, `recent`, `not-beneficial`, `formats`, `space-saved`
+- `dashboard` subcommand — generates a self-contained interactive HTML dashboard (ECharts) with KPI cards, space savings chart, conversion timeline, format breakdown, sortable tables, and per-drive filtering; auto-opens in default browser
 - `--db-path` flag to specify custom SQLite database location
 - `cmd/download-sample` — cross-platform Big Buck Bunny sample video downloader with interactive menu (6 options: 3 x 10s clips, 3 x full movie at 360p/720p/1080p)
 - `make download-sample` Makefile target

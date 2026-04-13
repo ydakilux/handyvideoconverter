@@ -10,7 +10,7 @@ A high-performance CLI batch video conversion tool for Windows that converts vid
 - **🔄 Smart Caching** - SQLite database with BLAKE3 hashing prevents re-processing
 - **🚀 Concurrent Processing** - Producer-consumer pipeline for efficient batch operations
 - **📊 Detailed Reporting** - Per-file conversion statistics with size comparisons
-- **🔍 Query Subcommands** - Built-in `stats`, `errors`, `recent`, `not-beneficial`, `formats`, `space-saved`
+- **🔍 Query Subcommands** - Built-in `stats`, `errors`, `recent`, `not-beneficial`, `formats`, `space-saved`, `dashboard`
 - **🎯 Quality Presets** - Configurable quality settings (high_quality, balanced, space_saver)
 - **📁 Directory Preservation** - Maintains folder structure from dropped directory onwards
 - **🧹 Smart Output** - Only creates directories when conversions succeed
@@ -149,9 +149,14 @@ video-converter.exe not-beneficial               # Files where output was larger
 video-converter.exe formats                      # Breakdown by source codec/container
 video-converter.exe space-saved                  # Total space saved
 video-converter.exe space-saved --period week    # Space saved in the last week
+video-converter.exe dashboard                    # Generate interactive HTML dashboard and open in browser
+video-converter.exe dashboard --no-browser       # Generate without opening
+video-converter.exe dashboard --output report.html  # Custom output path
 ```
 
 All subcommands accept `--db-path` to specify a custom database location. The `stats`, `errors`, `not-beneficial`, and `formats` subcommands also accept `--drive` to filter by drive root (e.g. `--drive D:\`).
+
+The `dashboard` subcommand generates a self-contained HTML file with interactive ECharts visualizations: KPI cards, space savings donut chart, conversion timeline, format breakdown, sortable recent conversions table, error list, and not-beneficial list — all filterable by drive via an in-page dropdown.
 
 ### Basic Usage
 ```bash
@@ -462,7 +467,7 @@ After processing, you'll see a comprehensive summary:
 - **SQLite Database** - Centralized conversion cache (`conversions.db` next to executable) with WAL mode
 - **Atomic File Operations** - Safe writes with temp files and rename
 - **Enriched Metadata** - Source codec, container, resolution, duration, timestamps stored per conversion
-- **Query Subcommands** - Six built-in commands to inspect conversion history
+- **Query Subcommands** - Seven built-in commands to inspect conversion history, including an interactive HTML dashboard
 - **Smart Progress Reporting** - FFmpeg progress parsing via stdout
 - **Multi-GPU Distribution** - Speed-balanced work distribution across NVIDIA GPUs
 
