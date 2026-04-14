@@ -59,7 +59,23 @@ type ParallelBenchmarkResult struct {
 type BenchmarkCache struct {
 	Results         map[string]BenchmarkResult         `json:"results"`
 	ParallelResults map[string]ParallelBenchmarkResult `json:"parallel_results,omitempty"`
+	Detection       *DetectionCache                    `json:"detection,omitempty"`
 	Version         string                             `json:"version"`
+}
+
+// DetectionCache stores the result of encoder auto-detection so trial encodes
+// can be skipped on subsequent launches.
+type DetectionCache struct {
+	BestEncoder string    `json:"best_encoder"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// IsDetectionCacheValid returns true if a non-expired detection result exists.
+func IsDetectionCacheValid(cache *BenchmarkCache) bool {
+	if cache == nil || cache.Detection == nil || cache.Detection.BestEncoder == "" {
+		return false
+	}
+	return time.Since(cache.Detection.Timestamp) < cacheMaxAge
 }
 
 // CacheKey returns a deterministic SHA-256-based key for caching a
