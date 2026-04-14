@@ -94,10 +94,11 @@ The tool runs natively on Linux and WSL2. A few things to be aware of:
 ## 📦 Installation
 
 ### Option 1: Download Binary (Recommended)
-1. Download `reforge.exe` from releases
-2. Download [FFmpeg](https://ffmpeg.org/download.html) and extract to `ffmpeg\bin\` folder
-3. Download [MediaInfo CLI](https://mediaarea.net/en/MediaInfo/Download/Windows) and extract
-4. Run `reforge.exe` - config will be auto-created on first run
+1. Download `reforge.exe` from [Releases](https://github.com/ydakilux/reforge/releases)
+2. **Windows security:** Right-click the downloaded `.exe` → **Properties** → check **Unblock** → OK. This is required because the file was downloaded from the internet and Windows blocks it by default.
+3. Download [FFmpeg](https://ffmpeg.org/download.html) and extract to `ffmpeg\bin\` folder
+4. Download [MediaInfo CLI](https://mediaarea.net/en/MediaInfo/Download/Windows) and extract
+5. Run `reforge.exe` - config will be auto-created on first run
 
 ### Option 2: Build from Source
 ```bash

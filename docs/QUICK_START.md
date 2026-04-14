@@ -1,5 +1,16 @@
 # Quick Start - Reforge
 
+## ⚠️ Windows Security Note
+
+After downloading `reforge.exe` from GitHub, Windows may block it from running. To fix this:
+
+1. Right-click the downloaded `.exe` file
+2. Select **Properties**
+3. At the bottom, check the **Unblock** checkbox
+4. Click **OK**
+
+This is a standard Windows security measure for files downloaded from the internet. You only need to do this once.
+
 ## 🚀 Basic Usage
 
 ```bash
