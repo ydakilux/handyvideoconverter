@@ -12,10 +12,10 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"video-converter/internal/encoder"
-	"video-converter/internal/fallback"
-	"video-converter/internal/gpu/benchmark"
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/encoder"
+	"github.com/ydakilux/reforge/internal/fallback"
+	"github.com/ydakilux/reforge/internal/gpu/benchmark"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 func newSilentLogger() *logrus.Logger {

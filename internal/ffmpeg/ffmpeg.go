@@ -15,7 +15,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 const (

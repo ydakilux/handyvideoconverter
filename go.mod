@@ -1,4 +1,4 @@
-module video-converter
+module github.com/ydakilux/reforge
 
 go 1.25.0
 
@@ -9,6 +9,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/zeebo/blake3 v0.2.3
 	golang.org/x/term v0.40.0
+	modernc.org/sqlite v1.48.1
 )
 
 require (
@@ -36,11 +37,9 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.3.8 // indirect
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.48.1 // indirect
 )

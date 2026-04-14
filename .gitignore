@@ -38,6 +38,7 @@ logs/
 
 # Runtime configuration
 configVideoConversion.json
+reforge.json
 
 # Build artifacts
 bin/
@@ -69,4 +70,7 @@ testdata/
 
 # Agent working directory
 .sisyphus/
-video-converter
+reforge
+
+# Generated Windows resource files
+rsrc_windows_*.syso

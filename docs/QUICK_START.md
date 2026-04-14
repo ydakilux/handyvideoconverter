@@ -1,16 +1,16 @@
-# Quick Start - Video Converter
+# Quick Start - Reforge
 
 ## 🚀 Basic Usage
 
 ```bash
 # Convert all videos in a folder (interactive prompts guide you through the rest)
-video-converter.exe D:\Videos\
+reforge.exe D:\Videos\
 
 # Multiple folders
-video-converter.exe D:\Movies\ E:\Shows\
+reforge.exe D:\Movies\ E:\Shows\
 
 # On WSL / Linux
-./video-converter /mnt/d/Videos/
+./reforge /mnt/d/Videos/
 ```
 
 > **WSL/Linux**: GPU encoding requires NVIDIA GPU + [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/) driver on the Windows host. Without it, the tool falls back to CPU (`libx265`) automatically. AMD/Intel GPU encoding is not available on WSL.
@@ -26,7 +26,7 @@ video-converter.exe D:\Movies\ E:\Shows\
 | `--same-drive` | off | Write output to the same drive as the source (skips drive prompt) |
 | `--jobs <n>` | `0` (auto) | Number of parallel conversion jobs; `0` uses the benchmark recommendation |
 | `--encoder <name>` | `auto` | Force a specific encoder (see below) |
-| `--config <path>` | `configVideoConversion.json` | Path to config file |
+| `--config <path>` | `reforge.json` | Path to config file |
 | `--non-interactive` | off | Skip GPU fallback prompts (useful for scripted runs) |
 | `--rebenchmark` | off | Force GPU benchmark even if a cached result exists |
 | `--db-path <path>` | `conversions.db` (next to exe) | Path to SQLite conversion database |
@@ -53,7 +53,7 @@ On each run you will be asked:
 
 ## 📊 Quality Presets
 
-Set `quality_preset` in `configVideoConversion.json`:
+Set `quality_preset` in `reforge.json`:
 
 | Preset | Best for | Expected savings |
 |--------|----------|-----------------|
@@ -65,35 +65,35 @@ Set `quality_preset` in `configVideoConversion.json`:
 
 ```bash
 # Run with exactly 2 parallel jobs (skips the interactive jobs prompt)
-video-converter.exe --jobs 2 D:\Videos\
+reforge.exe --jobs 2 D:\Videos\
 
 # Re-convert everything, even already-processed or already-HEVC files
-video-converter.exe --bypass --force-hevc D:\Videos\
+reforge.exe --bypass --force-hevc D:\Videos\
 
 # Write output to the same drive as the source, no prompts at all
-video-converter.exe --same-drive --bypass --jobs 4 D:\Videos\
+reforge.exe --same-drive --bypass --jobs 4 D:\Videos\
 
 # Dry run — see what would happen without converting anything
-video-converter.exe --dry-run D:\Videos\
+reforge.exe --dry-run D:\Videos\
 
 # Force CPU encoder (no GPU required)
-video-converter.exe --encoder libx265 D:\Videos\
+reforge.exe --encoder libx265 D:\Videos\
 
 # Use a custom config file
-video-converter.exe --config D:\my-settings.json D:\Videos\
+reforge.exe --config D:\my-settings.json D:\Videos\
 
 # Re-run benchmark before starting (after driver update, etc.)
-video-converter.exe --rebenchmark D:\Videos\
+reforge.exe --rebenchmark D:\Videos\
 
 # Fully non-interactive (no GPU fallback prompts; still asks for folder/drive)
-video-converter.exe --non-interactive D:\Videos\
+reforge.exe --non-interactive D:\Videos\
 ```
 
 ## 📁 Output Location
 
 Converted files are written to:
 ```
-<drive>\HSORTED\<source-folder>\<filename>.mp4
+<drive>\REFORGED\<source-folder>\<filename>.mp4
 ```
 
 Files that are **larger** after conversion are discarded automatically — the original is left untouched.
@@ -104,38 +104,38 @@ Inspect the conversion database without running a conversion:
 
 ```bash
 # Overall statistics (total files, space saved, success/error counts)
-video-converter.exe stats
+reforge.exe stats
 
 # Filter stats by drive
-video-converter.exe stats --drive D:\
+reforge.exe stats --drive D:\
 
 # List failed conversions with error messages
-video-converter.exe errors
+reforge.exe errors
 
 # Show 10 most recent conversions (default)
-video-converter.exe recent
+reforge.exe recent
 
 # Show 25 most recent
-video-converter.exe recent --limit 25
+reforge.exe recent --limit 25
 
 # Files where the converted output was larger than the original
-video-converter.exe not-beneficial
+reforge.exe not-beneficial
 
 # Breakdown by source codec and container format
-video-converter.exe formats
+reforge.exe formats
 
 # Total space saved (all time)
-video-converter.exe space-saved
+reforge.exe space-saved
 
 # Space saved in the last week or month
-video-converter.exe space-saved --period week
-video-converter.exe space-saved --period month
+reforge.exe space-saved --period week
+reforge.exe space-saved --period month
 
 # Generate an interactive HTML dashboard and open in browser
-video-converter.exe dashboard
+reforge.exe dashboard
 
 # Generate without opening, custom output path
-video-converter.exe dashboard --no-browser --output report.html
+reforge.exe dashboard --no-browser --output report.html
 ```
 
 All subcommands accept `--db-path` to use a custom database location.
@@ -155,7 +155,7 @@ benchmark.exe --input D:\Videos\
 benchmark.exe --input D:\Videos\ --jobs 1,2,4
 
 # Custom binary path and output file
-benchmark.exe --input D:\Videos\ --jobs 2,4 --bin D:\tools\video-converter.exe --output my_results.csv
+benchmark.exe --input D:\Videos\ --jobs 2,4 --bin D:\tools\reforge.exe --output my_results.csv
 ```
 
 ### Benchmark flags
@@ -165,7 +165,7 @@ benchmark.exe --input D:\Videos\ --jobs 2,4 --bin D:\tools\video-converter.exe -
 | `--input <dir>` | *(required)* | Input directory to convert |
 | `--jobs <list>` | `1,2,4,8` | Comma-separated list of `--jobs` values to test |
 | `--output <file>` | `benchmark_results.csv` | CSV output path |
-| `--bin <path>` | auto-detect | Path to `video-converter` binary |
+| `--bin <path>` | auto-detect | Path to `reforge` binary |
 | `--extra-flags <str>` | *(none)* | Additional flags forwarded to each converter run |
 
 The tool prints a summary table and writes a CSV with columns `jobs,elapsed,wall_ms,error`:

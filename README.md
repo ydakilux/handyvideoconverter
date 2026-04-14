@@ -1,4 +1,4 @@
-# Video Converter
+# Reforge
 
 A high-performance CLI batch video conversion tool for Windows that converts videos to HEVC/H.265 format with GPU auto-detection, intelligent caching, concurrent processing, and detailed conversion reporting.
 
@@ -45,9 +45,9 @@ When multiple NVIDIA GPUs are detected, the tool distributes encoding across the
 
 ## 🚀 Quick Start
 
-1. **Drop a folder** on `video-converter.exe` or run from command line:
+1. **Drop a folder** on `reforge.exe` or run from command line:
    ```bash
-   video-converter.exe D:\Videos\
+   reforge.exe D:\Videos\
    ```
 
 2. **Answer the prompts**:
@@ -74,7 +74,7 @@ When multiple NVIDIA GPUs are detected, the tool distributes encoding across the
    └────────────────────────────────────────────────────────────────┘
    ```
 
-4. **Find converted videos** at `D:\HSORTED\<your-folder>\`
+4. **Find converted videos** at `D:\REFORGED\<your-folder>\`
 
 ## 📋 Requirements
 
@@ -88,31 +88,31 @@ When multiple NVIDIA GPUs are detected, the tool distributes encoding across the
 The tool runs natively on Linux and WSL2. A few things to be aware of:
 
 - **GPU encoding on WSL2** requires NVIDIA GPU + the [CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/) driver installed on the Windows host. AMD and Intel GPU encoding are not supported on WSL. When GPU encoding is unavailable, the tool automatically falls back to CPU (`libx265`).
-- **Config portability**: if your `configVideoConversion.json` was created on Windows with a GPU encoder (e.g. `hevc_nvenc`), the tool will detect it is unavailable on WSL/Linux and fall back to `libx265` automatically.
-- **Output paths**: on WSL, output is written relative to the detected mount point (e.g. `/mnt/d/HSORTED/...`). On native Linux, it uses the first meaningful path prefix (e.g. `/home/user/HSORTED/...`).
+- **Config portability**: if your `reforge.json` was created on Windows with a GPU encoder (e.g. `hevc_nvenc`), the tool will detect it is unavailable on WSL/Linux and fall back to `libx265` automatically.
+- **Output paths**: on WSL, output is written relative to the detected mount point (e.g. `/mnt/d/REFORGED/...`). On native Linux, it uses the first meaningful path prefix (e.g. `/home/user/REFORGED/...`).
 
 ## 📦 Installation
 
 ### Option 1: Download Binary (Recommended)
-1. Download `video-converter.exe` from releases
+1. Download `reforge.exe` from releases
 2. Download [FFmpeg](https://ffmpeg.org/download.html) and extract to `ffmpeg\bin\` folder
 3. Download [MediaInfo CLI](https://mediaarea.net/en/MediaInfo/Download/Windows) and extract
-4. Run `video-converter.exe` - config will be auto-created on first run
+4. Run `reforge.exe` - config will be auto-created on first run
 
 ### Option 2: Build from Source
 ```bash
 # Clone the repository
 git clone <your-repo-url>
-cd VideoConverter
+cd reforge
 
 # Download dependencies
 go mod download
 
 # Build
-go build -o video-converter.exe
+go build -o reforge.exe
 
 # Or optimized build
-go build -ldflags="-s -w" -o video-converter.exe
+go build -ldflags="-s -w" -o reforge.exe
 ```
 
 ## 🎯 Usage
@@ -120,12 +120,12 @@ go build -ldflags="-s -w" -o video-converter.exe
 ### Command Line Flags
 
 ```
-video-converter.exe [flags] <directory>
+reforge.exe [flags] <directory>
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | `configVideoConversion.json` | Path to config file |
+| `--config` | `reforge.json` | Path to config file |
 | `--dry-run` | `false` | Preview mode, no actual conversion |
 | `--encoder` | `auto` | Encoder: `auto`, `hevc_nvenc`, `hevc_amf`, `hevc_qsv`, `libx265` |
 | `--bypass` | `false` | Re-convert files already recorded in the cache database |
@@ -141,17 +141,17 @@ video-converter.exe [flags] <directory>
 Query the conversion database without running a conversion:
 
 ```bash
-video-converter.exe stats                        # Overall conversion statistics
-video-converter.exe errors                       # List failed conversions
-video-converter.exe recent                       # Show 10 most recent conversions
-video-converter.exe recent --limit 25            # Show 25 most recent
-video-converter.exe not-beneficial               # Files where output was larger than input
-video-converter.exe formats                      # Breakdown by source codec/container
-video-converter.exe space-saved                  # Total space saved
-video-converter.exe space-saved --period week    # Space saved in the last week
-video-converter.exe dashboard                    # Generate interactive HTML dashboard and open in browser
-video-converter.exe dashboard --no-browser       # Generate without opening
-video-converter.exe dashboard --output report.html  # Custom output path
+reforge.exe stats                        # Overall conversion statistics
+reforge.exe errors                       # List failed conversions
+reforge.exe recent                       # Show 10 most recent conversions
+reforge.exe recent --limit 25            # Show 25 most recent
+reforge.exe not-beneficial               # Files where output was larger than input
+reforge.exe formats                      # Breakdown by source codec/container
+reforge.exe space-saved                  # Total space saved
+reforge.exe space-saved --period week    # Space saved in the last week
+reforge.exe dashboard                    # Generate interactive HTML dashboard and open in browser
+reforge.exe dashboard --no-browser       # Generate without opening
+reforge.exe dashboard --output report.html  # Custom output path
 ```
 
 All subcommands accept `--db-path` to specify a custom database location. The `stats`, `errors`, `not-beneficial`, and `formats` subcommands also accept `--drive` to filter by drive root (e.g. `--drive D:\`).
@@ -161,28 +161,28 @@ The `dashboard` subcommand generates a self-contained HTML file with interactive
 ### Basic Usage
 ```bash
 # Convert all videos in a directory (auto-detects best encoder)
-video-converter.exe D:\Videos\
+reforge.exe D:\Videos\
 
 # Dry run (preview without converting)
-video-converter.exe --dry-run D:\Videos\
+reforge.exe --dry-run D:\Videos\
 
 # Use custom config
-video-converter.exe --config myconfig.json D:\Videos\
+reforge.exe --config myconfig.json D:\Videos\
 
 # Force a specific encoder
-video-converter.exe --encoder libx265 D:\Videos\
+reforge.exe --encoder libx265 D:\Videos\
 
 # Re-convert everything, even already-cached or already-HEVC files
-video-converter.exe --bypass --force-hevc D:\Videos\
+reforge.exe --bypass --force-hevc D:\Videos\
 
 # Use 4 parallel jobs and write output to the same drive (no prompts)
-video-converter.exe --jobs 4 --same-drive D:\Videos\
+reforge.exe --jobs 4 --same-drive D:\Videos\
 
 # Non-interactive mode (good for scripts/scheduled tasks)
-video-converter.exe --non-interactive D:\Videos\
+reforge.exe --non-interactive D:\Videos\
 
 # Re-run GPU benchmark
-video-converter.exe --rebenchmark D:\Videos\
+reforge.exe --rebenchmark D:\Videos\
 ```
 
 ### Interactive Prompts
@@ -197,14 +197,14 @@ When you run the tool, it will ask:
    - `Y`: Re-encode HEVC files anyway
 
 3. **Output drive** (optional):
-   - Press Enter: Output to same drive as source (`D:\HSORTED\`)
-   - Specify drive: Output to different drive (`E:\` → `E:\HSORTED\`)
+   - Press Enter: Output to same drive as source (`D:\REFORGED\`)
+   - Specify drive: Output to different drive (`E:\` → `E:\REFORGED\`)
 
 When a GPU encoder fails mid-conversion, the tool asks whether to retry with CPU encoding. Use `--non-interactive` to skip this prompt and auto-fallback.
 
 ## ⚙️ Configuration
 
-The tool auto-creates `configVideoConversion.json` on first run. Here is the full set of available fields:
+The tool auto-creates `reforge.json` on first run. Here is the full set of available fields:
 
 ```json
 {
@@ -294,7 +294,7 @@ The tool preserves directory structure **from the dropped folder onwards**:
 Input:  Drop C:\Temp\Movies on the exe
         File: C:\Temp\Movies\Action\2024\video.mkv
 
-Output: D:\HSORTED\Movies\Action\2024\video.mp4
+Output: D:\REFORGED\Movies\Action\2024\video.mp4
 ```
 
 **Key behaviors:**
@@ -320,7 +320,7 @@ Output: D:\HSORTED\Movies\Action\2024\video.mp4
 You have a collection of videos taking up too much space:
 
 ```bash
-video-converter.exe E:\Movies\
+reforge.exe E:\Movies\
 # Choose preset "space_saver" in config for maximum compression
 # Expected: 40-60% size reduction
 ```
@@ -329,7 +329,7 @@ video-converter.exe E:\Movies\
 Converting high-quality source files for archival:
 
 ```bash
-video-converter.exe --encoder libx265 D:\Archive\
+reforge.exe --encoder libx265 D:\Archive\
 # Use preset "high_quality" in config
 # Prioritizes quality over file size
 ```
@@ -338,7 +338,7 @@ video-converter.exe --encoder libx265 D:\Archive\
 Force re-conversion of all files including cached and HEVC:
 
 ```bash
-video-converter.exe D:\Videos\
+reforge.exe D:\Videos\
 # Answer "y" to both prompts
 # Bypasses cache and re-encodes HEVC files
 ```
@@ -347,16 +347,16 @@ video-converter.exe D:\Videos\
 Convert videos but save to a different drive:
 
 ```bash
-video-converter.exe C:\Videos\
+reforge.exe C:\Videos\
 # When prompted for output drive, enter: E:\
-# Output will be: E:\HSORTED\Videos\...
+# Output will be: E:\REFORGED\Videos\...
 ```
 
 ### Scenario 5: Automated/Scripted Conversion
 Run from a script without any interactive prompts:
 
 ```bash
-video-converter.exe --non-interactive --encoder auto D:\Videos\
+reforge.exe --non-interactive --encoder auto D:\Videos\
 # GPU auto-detection with automatic CPU fallback on failure
 # No user interaction needed
 ```
@@ -405,7 +405,7 @@ video-converter.exe --non-interactive --encoder auto D:\Videos\
 
 **Solution:** The tool auto-falls back to CPU when `--encoder auto` is set. To force CPU encoding:
 ```bash
-video-converter.exe --encoder libx265 D:\Videos\
+reforge.exe --encoder libx265 D:\Videos\
 ```
 Or in config:
 ```json
@@ -419,7 +419,7 @@ Or in config:
 
 **Solution:** Benchmark results are cached after the first run, so subsequent launches are fast. To force a fresh benchmark:
 ```bash
-video-converter.exe --rebenchmark D:\Videos\
+reforge.exe --rebenchmark D:\Videos\
 ```
 
 ### Multi-GPU not distributing work

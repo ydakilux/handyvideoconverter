@@ -1,17 +1,27 @@
 package main
 
+//go:generate go-winres make --product-version=git-tag --file-version=git-tag
+
 import (
 	"flag"
 	"fmt"
 	"os"
 
-	"video-converter/internal/app"
+	"github.com/ydakilux/reforge/internal/app"
+)
+
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 func main() {
-	// Check for subcommands before flag parsing
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "version":
+			fmt.Printf("reforge %s (commit: %s, built: %s)\n", version, commit, date)
+			return
 		case "stats":
 			app.RunStats(os.Args[2:])
 			return
@@ -38,7 +48,7 @@ func main() {
 
 	// Default: existing conversion flow
 	var (
-		configFile     = flag.String("config", "configVideoConversion.json", "Path to config file")
+		configFile     = flag.String("config", "reforge.json", "Path to config file")
 		dryRun         = flag.Bool("dry-run", false, "Dry run mode")
 		bypassFlag     = flag.Bool("bypass", false, "Re-convert files already in the database (bypass DB check)")
 		forceHevcFlag  = flag.Bool("force-hevc", false, "Re-compress files that are already H.265/HEVC")
@@ -52,6 +62,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [subcommand] [flags] [directory]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Subcommands:\n")
+		fmt.Fprintf(os.Stderr, "  version         Print version information\n")
 		fmt.Fprintf(os.Stderr, "  stats           Show conversion statistics\n")
 		fmt.Fprintf(os.Stderr, "  errors          List failed conversions\n")
 		fmt.Fprintf(os.Stderr, "  recent          Show recent conversions\n")

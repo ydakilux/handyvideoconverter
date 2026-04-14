@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // TestPipelineRace verifies the pipeline is free of data races under concurrent use.

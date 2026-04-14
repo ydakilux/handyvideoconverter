@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 func TestNewPipeline(t *testing.T) {

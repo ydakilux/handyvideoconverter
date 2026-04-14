@@ -11,11 +11,11 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	cfgpkg "video-converter/internal/config"
-	"video-converter/internal/encoder"
-	"video-converter/internal/fallback"
-	"video-converter/internal/gpu/benchmark"
-	"video-converter/internal/gpu/detect"
+	cfgpkg "github.com/ydakilux/reforge/internal/config"
+	"github.com/ydakilux/reforge/internal/encoder"
+	"github.com/ydakilux/reforge/internal/fallback"
+	"github.com/ydakilux/reforge/internal/gpu/benchmark"
+	"github.com/ydakilux/reforge/internal/gpu/detect"
 )
 
 // mockGPUEncoder implements encoder.Encoder for testing FallbackManager.

@@ -250,14 +250,14 @@ func TestSetupLoggingCreatesLogFile(t *testing.T) {
 
 	found := false
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "video-converter_") && strings.HasSuffix(e.Name(), ".log") {
+		if strings.HasPrefix(e.Name(), "reforge_") && strings.HasSuffix(e.Name(), ".log") {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Error("expected log file with pattern video-converter_*.log to be created in logs/")
+		t.Error("expected log file with pattern reforge_*.log to be created in logs/")
 	}
 }
 
@@ -452,7 +452,7 @@ func TestSetupLoggingWritesToLogFile(t *testing.T) {
 	logsDir := filepath.Join(tmpDir, "logs")
 	entries, _ := os.ReadDir(logsDir)
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "video-converter_") && strings.HasSuffix(e.Name(), ".log") {
+		if strings.HasPrefix(e.Name(), "reforge_") && strings.HasSuffix(e.Name(), ".log") {
 			content, err := os.ReadFile(filepath.Join(logsDir, e.Name()))
 			if err != nil {
 				t.Fatalf("failed to read log file: %v", err)

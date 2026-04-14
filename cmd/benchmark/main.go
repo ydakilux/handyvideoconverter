@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"video-converter/internal/config"
-	"video-converter/internal/fileutil"
+	"github.com/ydakilux/reforge/internal/config"
+	"github.com/ydakilux/reforge/internal/fileutil"
 )
 
 type result struct {

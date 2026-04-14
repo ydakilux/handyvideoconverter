@@ -129,7 +129,7 @@ func TestRecordJSONRoundTrip(t *testing.T) {
 	original := Record{
 		OriginalSize:  1024000,
 		ConvertedSize: 512000,
-		Output:        "D:\\HSORTED\\test\\video.mp4",
+		Output:        "D:\\REFORGED\\test\\video.mp4",
 		Note:          "already_hevc",
 		Error:         "",
 	}

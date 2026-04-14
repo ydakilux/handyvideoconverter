@@ -8,7 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 	_ "modernc.org/sqlite"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 var _ Store = (*SQLiteStore)(nil)

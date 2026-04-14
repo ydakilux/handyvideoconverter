@@ -14,20 +14,20 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"video-converter/internal/config"
-	"video-converter/internal/database"
-	"video-converter/internal/encoder"
-	"video-converter/internal/fallback"
-	"video-converter/internal/ffmpeg"
-	"video-converter/internal/fileutil"
-	"video-converter/internal/pipeline"
-	"video-converter/internal/tui"
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/config"
+	"github.com/ydakilux/reforge/internal/database"
+	"github.com/ydakilux/reforge/internal/encoder"
+	"github.com/ydakilux/reforge/internal/fallback"
+	"github.com/ydakilux/reforge/internal/ffmpeg"
+	"github.com/ydakilux/reforge/internal/fileutil"
+	"github.com/ydakilux/reforge/internal/pipeline"
+	"github.com/ydakilux/reforge/internal/tui"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 const (
 	// OutputDirName is the top-level output directory created on the target drive.
-	OutputDirName = "HSORTED"
+	OutputDirName = "REFORGED"
 	// TempFilePrefix is prepended to temporary files during conversion.
 	TempFilePrefix = "__tmp__"
 )

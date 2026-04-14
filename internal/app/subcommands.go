@@ -11,8 +11,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"video-converter/internal/dashboard"
-	"video-converter/internal/database"
+	"github.com/ydakilux/reforge/internal/dashboard"
+	"github.com/ydakilux/reforge/internal/database"
 )
 
 func defaultDBPath() string {

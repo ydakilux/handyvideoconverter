@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 func TestLoadConfigReadsExistingJSON(t *testing.T) {

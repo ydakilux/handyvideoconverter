@@ -1,6 +1,6 @@
-# Agent Guidelines for Video Converter
+# Agent Guidelines for Reforge
 
-This document provides coding standards and development commands for AI agents working on this Go-based FFmpeg video conversion tool.
+This document provides coding standards and development commands for AI agents working on Reforge, a Go-based FFmpeg video conversion tool.
 
 ## Project Overview
 
@@ -23,28 +23,28 @@ go mod verify
 ### Build
 ```bash
 # Development build
-go build -o video-converter.exe
+go build -o reforge.exe
 
 # Production build (optimized, smaller binary)
 go build -ldflags="-s -w" -o video-converter.exe
 
 # Cross-compile (if needed)
-GOOS=windows GOARCH=amd64 go build -o video-converter.exe
+GOOS=windows GOARCH=amd64 go build -o reforge.exe
 ```
 
 ### Run
 ```bash
 # Basic usage
-./video-converter.exe D:\Videos\
+./reforge.exe D:\Videos\
 
 # With flags
-./video-converter.exe --config myconfig.json --dry-run --encoder libx265 D:\Media\
+./reforge.exe --config myconfig.json --dry-run --encoder libx265 D:\Media\
 
 # Interactive mode (prompts for bypass/force-hevc)
-./video-converter.exe D:\Videos\
+./reforge.exe D:\Videos\
 
 # Show help
-./video-converter.exe --help
+./reforge.exe --help
 ```
 
 ### Testing
@@ -239,8 +239,8 @@ info, _ := os.Stat(filePath)
 - Quality parameter: use `-crf` for libx265, `-cq` for nvenc encoders
 
 ### Output Organization
-- Final location: `<Drive>\HSORTED\<ParentFolder>\<filename>.mp4`
-- Temp location: `<Drive>\HSORTED\_TEMP\<ParentFolder>\__tmp__<hash8>.mp4`
+- Final location: `<Drive>\REFORGED\<ParentFolder>\<filename>.mp4`
+- Temp location: `<Drive>\REFORGED\_TEMP\<ParentFolder>\__tmp__<hash8>.mp4`
 - Sanitize folder names: replace `[\/:*?"<>|]` with `_`
 - Handle duplicate filenames by appending hash
 

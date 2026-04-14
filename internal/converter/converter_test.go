@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // ── Test helpers ────────────────────────────────────────────────────────────

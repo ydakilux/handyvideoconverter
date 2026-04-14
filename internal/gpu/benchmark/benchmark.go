@@ -13,7 +13,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"video-converter/internal/gpu/detect"
+	"github.com/ydakilux/reforge/internal/gpu/detect"
 )
 
 const (

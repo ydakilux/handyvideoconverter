@@ -12,12 +12,12 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	cfgpkg "video-converter/internal/config"
-	"video-converter/internal/database"
-	"video-converter/internal/ffmpeg"
-	"video-converter/internal/fileutil"
-	"video-converter/internal/pipeline"
-	"video-converter/internal/types"
+	cfgpkg "github.com/ydakilux/reforge/internal/config"
+	"github.com/ydakilux/reforge/internal/database"
+	"github.com/ydakilux/reforge/internal/ffmpeg"
+	"github.com/ydakilux/reforge/internal/fileutil"
+	"github.com/ydakilux/reforge/internal/pipeline"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // DiscoverFiles walks paths and returns all matching video files with their

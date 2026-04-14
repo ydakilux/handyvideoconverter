@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"video-converter/internal/tui"
+	"github.com/ydakilux/reforge/internal/tui"
 )
 
 // getDiskFreeBytes returns (availableBytes, totalBytes) for the given path using

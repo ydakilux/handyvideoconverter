@@ -9,7 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"video-converter/internal/discovery"
+	"github.com/ydakilux/reforge/internal/discovery"
 )
 
 func newTestLogger() *logrus.Logger {

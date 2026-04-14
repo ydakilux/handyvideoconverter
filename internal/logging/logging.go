@@ -155,7 +155,7 @@ func SetupLogging(serverURL, apiKey, logLevel, execDir string, seqEnabled bool, 
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create logs directory: %v\n", err)
 	}
-	logFileName := fmt.Sprintf("video-converter_%s.log", time.Now().Format("2006-01-02_15-04-05"))
+	logFileName := fmt.Sprintf("reforge_%s.log", time.Now().Format("2006-01-02_15-04-05"))
 	logFilePath := filepath.Join(logsDir, logFileName)
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {

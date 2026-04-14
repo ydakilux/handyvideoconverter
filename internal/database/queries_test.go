@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // seedTestDB inserts known records covering all states: successes, errors,
@@ -27,27 +27,27 @@ func seedTestDB(t *testing.T, store *SQLiteStore) {
 		// 5 successful conversions (no error, no special note)
 		{`D:\`, "hash_s1", types.Record{
 			OriginalSize: 10000, ConvertedSize: 6000, SourcePath: `D:\Videos\movie1.mkv`,
-			Output: `D:\HSORTED\movie1.mp4`, SourceCodec: "h264", SourceContainer: "matroska",
+			Output: `D:\REFORGED\movie1.mp4`, SourceCodec: "h264", SourceContainer: "matroska",
 			ConvertedAt: today,
 		}},
 		{`D:\`, "hash_s2", types.Record{
 			OriginalSize: 20000, ConvertedSize: 12000, SourcePath: `D:\Videos\clip.avi`,
-			Output: `D:\HSORTED\clip.mp4`, SourceCodec: "mpeg4", SourceContainer: "avi",
+			Output: `D:\REFORGED\clip.mp4`, SourceCodec: "mpeg4", SourceContainer: "avi",
 			ConvertedAt: today,
 		}},
 		{`E:\`, "hash_s3", types.Record{
 			OriginalSize: 30000, ConvertedSize: 18000, SourcePath: `E:\Media\show.mkv`,
-			Output: `E:\HSORTED\show.mp4`, SourceCodec: "h264", SourceContainer: "matroska",
+			Output: `E:\REFORGED\show.mp4`, SourceCodec: "h264", SourceContainer: "matroska",
 			ConvertedAt: threeDaysAgo,
 		}},
 		{`D:\`, "hash_s4", types.Record{
 			OriginalSize: 15000, ConvertedSize: 9000, SourcePath: `D:\Videos\tutorial.mp4`,
-			Output: `D:\HSORTED\tutorial.mp4`, SourceCodec: "vp9", SourceContainer: "mp4",
+			Output: `D:\REFORGED\tutorial.mp4`, SourceCodec: "vp9", SourceContainer: "mp4",
 			ConvertedAt: threeDaysAgo,
 		}},
 		{`E:\`, "hash_s5", types.Record{
 			OriginalSize: 50000, ConvertedSize: 30000, SourcePath: `E:\Media\old.mkv`,
-			Output: `E:\HSORTED\old.mp4`, SourceCodec: "h264", SourceContainer: "matroska",
+			Output: `E:\REFORGED\old.mp4`, SourceCodec: "h264", SourceContainer: "matroska",
 			ConvertedAt: twoMonthsAgo,
 		}},
 
@@ -383,8 +383,8 @@ func TestGetRecent_FieldPopulation(t *testing.T) {
 		if r.SourceCodec != "h264" {
 			t.Errorf("SourceCodec = %q, want h264", r.SourceCodec)
 		}
-		if r.OutputPath != `D:\HSORTED\movie1.mp4` {
-			t.Errorf("OutputPath = %q, want D:\\HSORTED\\movie1.mp4", r.OutputPath)
+		if r.OutputPath != `D:\REFORGED\movie1.mp4` {
+			t.Errorf("OutputPath = %q, want D:\\REFORGED\\movie1.mp4", r.OutputPath)
 		}
 	}
 

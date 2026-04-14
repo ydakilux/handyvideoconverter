@@ -3,7 +3,7 @@ package pipeline
 import (
 	"sort"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // Distributor assigns GPU indices to jobs proportional to measured GPU speeds.

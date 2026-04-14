@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // ValidEncoders returns the list of accepted encoder names.

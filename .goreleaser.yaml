@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: reforge
+
+before:
+  hooks:
+    - go mod tidy
+    - go install github.com/tc-hib/go-winres@latest
+    - go-winres make --product-version={{.Version}} --file-version={{.Version}}
+
+builds:
+  - id: reforge
+    main: .
+    binary: reforge
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: ydakilux
+    name: reforge
+  draft: false
+  prerelease: auto

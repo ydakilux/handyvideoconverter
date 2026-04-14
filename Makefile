@@ -1,4 +1,4 @@
-# Makefile for video-converter
+# Makefile for Reforge
 # Go-based CLI batch video conversion tool using FFmpeg
 #
 # Usage: make [target]
@@ -7,9 +7,9 @@
 # ──────────────────────────────────────────────────────────────────
 # Variables
 # ──────────────────────────────────────────────────────────────────
-BINARY_WIN       := video-converter.exe
-BINARY_LINUX     := video-converter-linux
-BINARY_DARWIN    := video-converter-darwin
+BINARY_WIN       := reforge.exe
+BINARY_LINUX     := reforge-linux
+BINARY_DARWIN    := reforge-darwin
 BENCHMARK_WIN    := benchmark.exe
 BENCHMARK_LINUX  := benchmark-linux
 BENCHMARK_DARWIN := benchmark-darwin
@@ -18,15 +18,15 @@ COVERAGE         := coverage.out
 
 # Native binary name — auto-detected from OS
 ifeq ($(OS),Windows_NT)
-  BINARY_NAME    := video-converter.exe
+  BINARY_NAME    := reforge.exe
   BENCHMARK_NAME := benchmark.exe
 else
   UNAME_S := $(shell uname -s)
   ifeq ($(UNAME_S),Darwin)
-    BINARY_NAME    := video-converter
+    BINARY_NAME    := reforge
     BENCHMARK_NAME := benchmark
   else
-    BINARY_NAME    := video-converter
+    BINARY_NAME    := reforge
     BENCHMARK_NAME := benchmark
   endif
 endif
@@ -41,9 +41,15 @@ endif
         release release-windows release-linux release-darwin release-all \
         benchmark benchmark-windows benchmark-linux benchmark-darwin benchmark-all \
         test test-verbose test-race test-short test-cover cover cover-html \
-        fmt vet lint tidy clean download-sample help
+        fmt vet lint tidy clean download-sample winres help
 
 all: lint test build  ## Run lint + test + build (auto-detects OS)
+
+# ──────────────────────────────────────────────────────────────────
+# Windows resource embedding (icon, version info, manifest)
+# ──────────────────────────────────────────────────────────────────
+winres:  ## Generate Windows resource files (.syso) with icon and version info
+	go-winres make --product-version=git-tag --file-version=git-tag
 
 # ──────────────────────────────────────────────────────────────────
 # Build
@@ -51,7 +57,7 @@ all: lint test build  ## Run lint + test + build (auto-detects OS)
 build:  ## Development build for current OS
 	go build -o $(BINARY_NAME) .
 
-build-windows:  ## Development build for Windows
+build-windows: winres  ## Development build for Windows
 	GOOS=windows GOARCH=amd64 go build -o $(BINARY_WIN) .
 
 build-linux:  ## Development build for Linux
@@ -71,7 +77,7 @@ build-all: build-windows build-linux build-darwin  ## Development build for all 
 release:  ## Production build for current OS (stripped symbols, smaller binary)
 	go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) .
 
-release-windows:  ## Production build for Windows
+release-windows: winres  ## Production build for Windows
 	GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_WIN) .
 
 release-linux:  ## Production build for Linux
@@ -162,6 +168,7 @@ clean:  ## Remove build artifacts and coverage files
 	rm -f $(BINARY_WIN) $(BINARY_LINUX) $(BINARY_DARWIN) $(BINARY_DARWIN)-arm64
 	rm -f $(BENCHMARK_WIN) $(BENCHMARK_LINUX) $(BENCHMARK_DARWIN)
 	rm -f $(COVERAGE)
+	rm -f rsrc_windows_*.syso
 
 # ──────────────────────────────────────────────────────────────────
 # Sample video download (Big Buck Bunny)

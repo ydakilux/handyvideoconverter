@@ -6,7 +6,7 @@ func renderHTML(jsonData string) string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Video Converter Dashboard</title>
+<title>Reforge Dashboard</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -117,7 +117,7 @@ td.path-cell{font-family:var(--font-mono);font-size:0.78rem}
 <div class="dashboard" id="app">
 <div class="header">
 <div class="header-left">
-<h1>Video Converter Dashboard</h1>
+<h1>Reforge Dashboard</h1>
 <div class="timestamp" id="timestamp"></div>
 </div>
 <div class="header-right">

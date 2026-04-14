@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // ConversionResult holds the outcome of a single conversion job.

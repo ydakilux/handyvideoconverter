@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"video-converter/internal/fileutil"
+	"github.com/ydakilux/reforge/internal/fileutil"
 )
 
 func (m setupModel) viewStepStartup() string {

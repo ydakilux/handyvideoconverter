@@ -3,7 +3,7 @@ package database
 import (
 	"context"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // Stats holds aggregate conversion statistics.

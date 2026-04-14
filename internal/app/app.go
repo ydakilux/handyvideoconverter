@@ -14,20 +14,20 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	cfgpkg "video-converter/internal/config"
-	"video-converter/internal/converter"
-	"video-converter/internal/database"
-	"video-converter/internal/discovery"
-	"video-converter/internal/encoder"
-	"video-converter/internal/fallback"
-	"video-converter/internal/fileutil"
-	"video-converter/internal/gpu/benchmark"
-	"video-converter/internal/gpu/detect"
-	"video-converter/internal/gpu/nvidia"
-	"video-converter/internal/logging"
-	"video-converter/internal/pipeline"
-	"video-converter/internal/tui"
-	"video-converter/internal/types"
+	cfgpkg "github.com/ydakilux/reforge/internal/config"
+	"github.com/ydakilux/reforge/internal/converter"
+	"github.com/ydakilux/reforge/internal/database"
+	"github.com/ydakilux/reforge/internal/discovery"
+	"github.com/ydakilux/reforge/internal/encoder"
+	"github.com/ydakilux/reforge/internal/fallback"
+	"github.com/ydakilux/reforge/internal/fileutil"
+	"github.com/ydakilux/reforge/internal/gpu/benchmark"
+	"github.com/ydakilux/reforge/internal/gpu/detect"
+	"github.com/ydakilux/reforge/internal/gpu/nvidia"
+	"github.com/ydakilux/reforge/internal/logging"
+	"github.com/ydakilux/reforge/internal/pipeline"
+	"github.com/ydakilux/reforge/internal/tui"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // MaxParallelJobsCap is the hard upper bound on concurrent conversion jobs.
@@ -352,7 +352,7 @@ func (a *App) runSummaryPhase() {
 	boxSummary := a.buildStatsSummaryBox(elapsed)
 	a.ui.PrintSummary(boxSummary)
 
-	openHSortedFolders(a.stats.TouchedDrives, a.outputDrive)
+	openREFORGEDFolders(a.stats.TouchedDrives, a.outputDrive)
 
 	fmt.Println("All tasks completed")
 	fmt.Println()
@@ -718,20 +718,20 @@ func (a *App) promptInstallFFmpeg() error {
 	return fmt.Errorf("ffmpeg not found — please install ffmpeg and add it to PATH, or set ffmpeg_path in the config file")
 }
 
-func openHSortedFolders(touchedDrives map[string]bool, outputDriveOverride string) {
+func openREFORGEDFolders(touchedDrives map[string]bool, outputDriveOverride string) {
 	// When an output drive was chosen, all files land on that single drive.
-	// Open only that drive's HSORTED folder; ignore the source drives.
+	// Open only that drive's REFORGED folder; ignore the source drives.
 	if outputDriveOverride != "" {
-		hsortedPath := filepath.Join(outputDriveOverride, converter.OutputDirName)
-		if _, err := os.Stat(hsortedPath); err == nil {
-			openFolder(hsortedPath) //nolint:errcheck
+		REFORGEDPath := filepath.Join(outputDriveOverride, converter.OutputDirName)
+		if _, err := os.Stat(REFORGEDPath); err == nil {
+			openFolder(REFORGEDPath) //nolint:errcheck
 		}
 		return
 	}
 	for drive := range touchedDrives {
-		hsortedPath := filepath.Join(drive, converter.OutputDirName)
-		if _, err := os.Stat(hsortedPath); err == nil {
-			openFolder(hsortedPath) //nolint:errcheck
+		REFORGEDPath := filepath.Join(drive, converter.OutputDirName)
+		if _, err := os.Stat(REFORGEDPath); err == nil {
+			openFolder(REFORGEDPath) //nolint:errcheck
 		}
 	}
 }

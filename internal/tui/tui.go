@@ -1,8 +1,8 @@
-// Package tui provides a Bubble Tea–based terminal UI for the video converter.
+// Package tui provides a Bubble Tea–based terminal UI for Reforge.
 //
 // Layout (adapts to terminal width):
 //
-//	╭─ Video Converter ────────────────────────── ⏱ 00:02:34 ─╮
+//	╭─ Reforge ─────────────────────────────────── ⏱ 00:02:34 ─╮
 //	│                                                           │
 //	│  [3/12] myvideo_long.mkv              1080p              │
 //	│  ████████████████░░░░░░░░   64%  elapsed 0:45  ETA ~25s  │
@@ -722,7 +722,7 @@ func (m model) renderInner() string {
 	var b strings.Builder
 
 	// ── Title bar ──
-	title := styleTitle.Render("Video Converter")
+	title := styleTitle.Render("Reforge")
 	var timerStr string
 	if m.timerActive {
 		elapsed := time.Since(m.timerStart).Round(time.Second)

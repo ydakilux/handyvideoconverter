@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 func newTestApp() *App {

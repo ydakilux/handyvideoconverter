@@ -1,14 +1,14 @@
-# Video Converter - Quality Settings Guide
+# Reforge - Quality Settings Guide
 
 ## Overview
 
-The video converter supports flexible quality settings to balance between file size and video quality. Each encoder uses its own quality parameter, and the tool normalizes your preset choice across all of them automatically.
+Reforge supports flexible quality settings to balance between file size and video quality. Each encoder uses its own quality parameter, and the tool normalizes your preset choice across all of them automatically.
 
 When `"video_encoder"` is set to `"auto"` (the default), the tool picks the best available encoder and applies the correct quality parameters for that encoder.
 
 ## Configuration Location
 
-Edit `configVideoConversion.json` (next to the executable)
+Edit `reforge.json` (next to the executable)
 
 ## Quality Presets
 
@@ -233,7 +233,7 @@ Use **high_quality** to preserve maximum detail:
 1. **Backup your config** before making changes
 2. **Run with --dry-run** to see what would happen:
    ```bash
-   video-converter.exe --dry-run V:\Videos\
+   reforge.exe --dry-run V:\Videos\
    ```
 3. **Test on a few files first** before batch processing
 4. **Check the results** - files should show reduction, not increase

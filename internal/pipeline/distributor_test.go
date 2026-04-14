@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 func makeJobs(n int) []types.Job {

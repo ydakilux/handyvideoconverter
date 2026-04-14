@@ -7,14 +7,14 @@ import (
 	"sync"
 	"testing"
 
-	"video-converter/internal/types"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 func fullRecord() types.Record {
 	return types.Record{
 		OriginalSize:           4096000,
 		ConvertedSize:          2048000,
-		Output:                 `D:\HSORTED\Movies\test.mp4`,
+		Output:                 `D:\REFORGED\Movies\test.mp4`,
 		Note:                   "conversion_complete",
 		Error:                  "",
 		SourceCodec:            "h264",
@@ -153,8 +153,8 @@ func TestSQLiteMultipleDrives(t *testing.T) {
 	ctx := context.Background()
 
 	hash := "shared_hash"
-	recD := types.Record{OriginalSize: 1000, Output: `D:\HSORTED\test.mp4`}
-	recE := types.Record{OriginalSize: 2000, Output: `E:\HSORTED\test.mp4`}
+	recD := types.Record{OriginalSize: 1000, Output: `D:\REFORGED\test.mp4`}
+	recE := types.Record{OriginalSize: 2000, Output: `E:\REFORGED\test.mp4`}
 
 	if err := store.UpdateRecord(ctx, `D:\`, hash, recD); err != nil {
 		t.Fatalf("UpdateRecord D: %v", err)

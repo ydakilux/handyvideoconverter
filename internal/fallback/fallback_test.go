@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"video-converter/internal/encoder"
+	"github.com/ydakilux/reforge/internal/encoder"
 
 	"github.com/sirupsen/logrus"
 )

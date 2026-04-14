@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	cfgpkg "video-converter/internal/config"
-	"video-converter/internal/converter"
-	"video-converter/internal/types"
+	cfgpkg "github.com/ydakilux/reforge/internal/config"
+	"github.com/ydakilux/reforge/internal/converter"
+	"github.com/ydakilux/reforge/internal/types"
 )
 
 // containsExtCompat is a local copy of config.containsExt for use in

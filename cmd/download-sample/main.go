@@ -120,7 +120,7 @@ func showMenuAndDownload() {
 	fmt.Printf("\nSaved: %s (%.1f MB)\n", dest, float64(info.Size())/(1024*1024))
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Printf("  video-converter %s\n", testdataDir)
+	fmt.Printf("  reforge %s\n", testdataDir)
 	fmt.Printf("  go run ./cmd/benchmark --input %s\n", testdataDir)
 }
 

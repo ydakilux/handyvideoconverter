@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"video-converter/internal/encoder"
+	"github.com/ydakilux/reforge/internal/encoder"
 
 	"github.com/sirupsen/logrus"
 )
