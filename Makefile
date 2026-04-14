@@ -20,6 +20,7 @@ COVERAGE         := coverage.out
 ifeq ($(OS),Windows_NT)
   BINARY_NAME    := reforge.exe
   BENCHMARK_NAME := benchmark.exe
+  WINRES_DEP     := winres
 else
   UNAME_S := $(shell uname -s)
   ifeq ($(UNAME_S),Darwin)
@@ -29,6 +30,7 @@ else
     BINARY_NAME    := reforge
     BENCHMARK_NAME := benchmark
   endif
+  WINRES_DEP     :=
 endif
 
 # ──────────────────────────────────────────────────────────────────
@@ -54,7 +56,7 @@ winres:  ## Generate Windows resource files (.syso) with icon and version info
 # ──────────────────────────────────────────────────────────────────
 # Build
 # ──────────────────────────────────────────────────────────────────
-build:  ## Development build for current OS
+build: $(WINRES_DEP)  ## Development build for current OS
 	go build -o $(BINARY_NAME) .
 
 build-windows: winres  ## Development build for Windows
@@ -74,7 +76,7 @@ build-all: build-windows build-linux build-darwin  ## Development build for all 
 # ──────────────────────────────────────────────────────────────────
 # Release (optimised, stripped)
 # ──────────────────────────────────────────────────────────────────
-release:  ## Production build for current OS (stripped symbols, smaller binary)
+release: $(WINRES_DEP)  ## Production build for current OS (stripped symbols, smaller binary)
 	go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) .
 
 release-windows: winres  ## Production build for Windows
