@@ -186,7 +186,7 @@ func (a *App) runSetupPhase() (setupResult, error) {
 
 		startupCh <- fmt.Sprintf("Encoder: %s", a.config.VideoEncoder)
 
-		if err := a.runBenchmarks(ffmpegExe); err != nil {
+		if err := a.runBenchmarks(ffmpegExe, startupCh); err != nil {
 			startupErrCh <- err
 			return
 		}
@@ -399,28 +399,53 @@ func (a *App) selectEncoder(ffmpegExe string) error {
 
 	requestedEncoder := a.config.VideoEncoder
 	fellBackToCPU := false
+	usedDetectionCache := false
 
 	if a.config.VideoEncoder == "auto" {
-		a.log.Info("Auto-detecting GPU encoders...")
-		detectionResult, err := detect.DetectEncoders(ffmpegExe, a.log)
-		if err != nil {
-			a.log.Warnf("GPU detection failed: %v", err)
-			a.config.VideoEncoder = "libx265"
-			fellBackToCPU = true
+		// Check detection cache before running expensive trial encodes.
+		cache, _ := benchmark.LoadCache(a.configFilePath)
+		if !a.config.Rebenchmark && benchmark.IsDetectionCacheValid(cache) {
+			a.config.VideoEncoder = cache.Detection.BestEncoder
+			a.log.Infof("Using cached encoder detection: %s", a.config.VideoEncoder)
+			usedDetectionCache = true
 		} else {
-			for _, gpu := range detectionResult.Available {
-				if gpu.Available {
-					a.log.Infof("  %-14s  %-20s  available (%dms)", gpu.Encoder, gpu.Name, gpu.TrialEncodeMs)
-				} else {
-					a.log.Infof("  %-14s  %-20s  unavailable", gpu.Encoder, gpu.Name)
+			a.log.Info("Auto-detecting GPU encoders...")
+			detectionResult, err := detect.DetectEncoders(ffmpegExe, a.log)
+			if err != nil {
+				a.log.Warnf("GPU detection failed: %v", err)
+				a.config.VideoEncoder = "libx265"
+				fellBackToCPU = true
+			} else {
+				for _, gpu := range detectionResult.Available {
+					if gpu.Available {
+						a.log.Infof("  %-14s  %-20s  available (%dms)", gpu.Encoder, gpu.Name, gpu.TrialEncodeMs)
+					} else {
+						a.log.Infof("  %-14s  %-20s  unavailable", gpu.Encoder, gpu.Name)
+					}
+				}
+				best := detect.SelectBest(detectionResult)
+				a.config.VideoEncoder = best.Encoder
+				if best.Encoder == "libx265" {
+					fellBackToCPU = true
+				}
+				a.log.Infof("Best encoder: %s (%s)", best.Encoder, best.Name)
+			}
+
+			// Persist detection result so future launches skip trial encodes.
+			if cache == nil {
+				cache = &benchmark.BenchmarkCache{
+					Results:         make(map[string]benchmark.BenchmarkResult),
+					ParallelResults: make(map[string]benchmark.ParallelBenchmarkResult),
+					Version:         "1",
 				}
 			}
-			best := detect.SelectBest(detectionResult)
-			a.config.VideoEncoder = best.Encoder
-			if best.Encoder == "libx265" {
-				fellBackToCPU = true
+			cache.Detection = &benchmark.DetectionCache{
+				BestEncoder: a.config.VideoEncoder,
+				Timestamp:   time.Now(),
 			}
-			a.log.Infof("Best encoder: %s (%s)", best.Encoder, best.Name)
+			if err := benchmark.SaveCache(a.configFilePath, cache); err != nil {
+				a.log.Warnf("Failed to save detection cache: %v", err)
+			}
 		}
 	}
 
@@ -428,7 +453,8 @@ func (a *App) selectEncoder(ffmpegExe string) error {
 	// The config may have been written on a different OS (e.g. Windows) where
 	// the encoder was available, but the current host (e.g. WSL/Linux) may
 	// lack the required hardware or FFmpeg codec support.
-	if a.config.VideoEncoder != "auto" && a.config.VideoEncoder != "libx265" {
+	// Skip when the encoder came from the detection cache (already verified).
+	if !usedDetectionCache && a.config.VideoEncoder != "auto" && a.config.VideoEncoder != "libx265" {
 		if candidate, found := a.encoderRegistry.Get(a.config.VideoEncoder); found {
 			if !candidate.IsAvailable(ffmpegExe) {
 				a.log.Warnf("Configured encoder %q is not available on this system", a.config.VideoEncoder)
@@ -480,10 +506,12 @@ func (a *App) confirmCPUFallback() error {
 	return fmt.Errorf("aborted — no GPU encoder available")
 }
 
-func (a *App) runBenchmarks(ffmpegExe string) error {
+func (a *App) runBenchmarks(ffmpegExe string, startupCh chan<- string) error {
 	if a.config.VideoEncoder == "libx265" {
 		return nil
 	}
+
+	progress := func(msg string) { startupCh <- msg }
 
 	qualityArgs := a.selectedEncoder.QualityArgs(a.config.QualityPreset, 1920)
 	cache, _ := benchmark.LoadCache(a.configFilePath)
@@ -500,26 +528,30 @@ func (a *App) runBenchmarks(ffmpegExe string) error {
 		gpus, err := nvidia.QueryGPUs(a.log)
 		if err == nil && len(gpus) > 1 {
 			a.log.Infof("Detected %d NVIDIA GPUs — benchmarking each", len(gpus))
+			progress(fmt.Sprintf("Detected %d NVIDIA GPUs", len(gpus)))
 			a.gpuBenchmarks = make(map[int]float64, len(gpus))
 
-			for _, gpu := range gpus {
+			for i, gpu := range gpus {
 				deviceArgs := a.selectedEncoder.DeviceArgs(gpu.Index)
 				key := benchmark.CacheKey(a.config.VideoEncoder, gpu.Name, "")
 
 				if !a.config.Rebenchmark && benchmark.IsCacheValid(cache, key) {
 					cached := cache.Results[key]
 					a.log.Infof("Using cached benchmark for GPU %d (%s): %.1f FPS", gpu.Index, gpu.Name, cached.FPS)
+					progress(fmt.Sprintf("GPU %d: %.0f FPS (cached)", gpu.Index, cached.FPS))
 					a.gpuBenchmarks[gpu.Index] = cached.FPS
 					continue
 				}
 
 				a.log.Infof("Benchmarking GPU %d (%s, %d MB VRAM)...", gpu.Index, gpu.Name, gpu.VRAMTotalMB)
+				progress(fmt.Sprintf("Benchmarking GPU %d/%d (%s)…", i+1, len(gpus), gpu.Name))
 				result, err := benchmark.RunBenchmark(ffmpegExe, a.config.VideoEncoder, gpu.Index, qualityArgs, a.log, deviceArgs)
 				if err != nil {
 					a.log.Warnf("Benchmark failed for GPU %d (%s): %v — skipping this GPU", gpu.Index, gpu.Name, err)
 					continue
 				}
 				a.log.Infof("GPU %d (%s): %.1f FPS (%.2fx realtime)", gpu.Index, gpu.Name, result.FPS, result.SpeedX)
+				progress(fmt.Sprintf("GPU %d: %.0f FPS", gpu.Index, result.FPS))
 				result.CacheKey = key
 				cache.Results[key] = *result
 				a.gpuBenchmarks[gpu.Index] = result.FPS
@@ -537,17 +569,20 @@ func (a *App) runBenchmarks(ffmpegExe string) error {
 	if a.gpuBenchmarks == nil {
 		if a.config.Rebenchmark || !benchmark.IsCacheValid(cache, singleKey) {
 			a.log.Info("Running GPU benchmark (single stream)...")
+			progress("Benchmarking GPU speed…")
 			result, err := benchmark.RunBenchmark(ffmpegExe, a.config.VideoEncoder, 0, qualityArgs, a.log)
 			if err != nil {
 				a.log.Warnf("Benchmark failed: %v — proceeding without speed data", err)
 			} else {
 				a.log.Infof("Benchmark: %s @ %.1f FPS (%.2fx realtime)", a.config.VideoEncoder, result.FPS, result.SpeedX)
+				progress(fmt.Sprintf("Benchmark: %.0f FPS (%.1fx realtime)", result.FPS, result.SpeedX))
 				result.CacheKey = singleKey
 				cache.Results[singleKey] = *result
 			}
 		} else {
 			cached := cache.Results[singleKey]
 			a.log.Infof("Using cached benchmark: %.1f FPS for %s", cached.FPS, a.config.VideoEncoder)
+			progress(fmt.Sprintf("Benchmark: %.0f FPS (cached)", cached.FPS))
 		}
 	}
 
@@ -556,6 +591,7 @@ func (a *App) runBenchmarks(ffmpegExe string) error {
 		parallelKey := benchmark.ParallelCacheKey(a.config.VideoEncoder)
 		if a.config.Rebenchmark || !benchmark.IsParallelCacheValid(cache, parallelKey) {
 			a.log.Info("Running parallel performance sweep (this takes ~2 minutes)...")
+			progress("Parallel sweep (1–4 streams)…")
 			sweepResult, err := benchmark.RunParallelSweep(ffmpegExe, a.config.VideoEncoder, 4, qualityArgs, a.log)
 			if err != nil {
 				a.log.Warnf("Parallel sweep failed: %v — keeping current parallel setting", err)
