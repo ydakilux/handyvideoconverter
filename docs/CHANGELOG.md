@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.9.1] - 2026-04-14
+
+### Added
+- **Encoder detection cache** — auto-detected encoder is persisted in `benchmark_cache.json` so subsequent launches skip trial encodes entirely (same 30-day expiry as benchmark results, respects `--rebenchmark`)
+- **Benchmark progress in TUI** — `runBenchmarks()` streams status messages ("Benchmarking GPU…", "Using cached results", "Running parallel sweep…") to the startup screen spinner
+
+---
+
+## [0.9.0] - 2026-04-14
+
 ### Added
 - **SQLite conversion database** replacing per-drive JSON caching — centralized `conversions.db` next to executable, WAL mode, pure Go via `modernc.org/sqlite` (no CGO)
 - `Store` interface with 11 methods + `SQLiteStore` implementation in `internal/database`
@@ -121,8 +133,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `--dry-run` flag — preview without writing any files
 - `--config` flag — path to config file
 
-[Unreleased]: https://github.com/your-org/handyvideoconverter/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/your-org/handyvideoconverter/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/your-org/handyvideoconverter/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/your-org/handyvideoconverter/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/your-org/handyvideoconverter/releases/tag/v0.1.0
+[Unreleased]: https://github.com/ydakilux/reforge/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/ydakilux/reforge/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/ydakilux/reforge/compare/v0.4.0...v0.9.0
+[0.4.0]: https://github.com/ydakilux/reforge/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/ydakilux/reforge/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/ydakilux/reforge/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/ydakilux/reforge/releases/tag/v0.1.0
